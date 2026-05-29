@@ -1,3 +1,3 @@
-export default function Index() {
-  return null;
-}
+import HomeScreen from '../screens/HomeScreen';
+
+export default HomeScreen;
