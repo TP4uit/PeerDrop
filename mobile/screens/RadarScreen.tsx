@@ -69,12 +69,12 @@ export default function RadarScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <MaterialCommunityIcons name="chevron-left" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Searching...</Text>
+        <Text style={styles.headerTitle}>Send Mode</Text>
         <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.body}>
-        <Text style={styles.searchLabel}>Looking for nearby devices</Text>
+        <Text style={styles.searchLabel}>Looking for nearby receivers</Text>
 
         <View style={[styles.radarContainer, { width: radarSize, height: radarSize }]}>            
           <View style={styles.radarOuter} />
