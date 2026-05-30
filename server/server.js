@@ -1,32 +1,38 @@
+// server/server.js
 const express = require('express');
 const http = require('http');
-const cors = require('cors');
 const { Server } = require('socket.io');
 
-const roomHandler = require('./src/sockets/roomHandler');
-const webrtcHandler = require('./src/sockets/webrtcHandler');
+const registerRoomHandlers = require('./src/sockets/roomHandler');
+const registerWebrtcHandlers = require('./src/sockets/webrtcHandler');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-
 const server = http.createServer(app);
+
+// Cấu hình Socket.io với CORS
+// Trong môi trường dev có thể mở '*', khi lên production cần giới hạn origin
 const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
-  },
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST']
+    }
 });
 
-roomHandler(io);
-webrtcHandler(io);
+// Bộ nhớ tạm trên RAM để quản lý các phòng. 
+// Cấu trúc: Map<roomId, { users: Map<socketId, userInfo> }>
+const rooms = new Map();
 
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'PeerDrop signaling server' });
+io.on('connection', (socket) => {
+    console.log(`[+] Mới kết nối: ${socket.id}`);
+
+    // Truyền shared state 'rooms' vào roomHandler để quản lý logic phòng
+    registerRoomHandlers(io, socket, rooms);
+    
+    // webrtcHandler chỉ làm nhiệm vụ trung chuyển, không cần biết state của rooms
+    registerWebrtcHandlers(io, socket);
 });
 
 const PORT = process.env.PORT || 3000;
-
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`PeerDrop signaling server listening on port ${PORT}`);
+server.listen(PORT, () => {
+    console.log(`[🚀] PeerDrop Signaling Server đang chạy tại port ${PORT}`);
 });
