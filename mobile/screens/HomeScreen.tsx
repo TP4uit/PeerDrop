@@ -105,8 +105,8 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.actionRow}>
-            {renderActionCard('upload', 'Send', 'Share files now', () => router.push('/file-selection'), '#4CAF50')}
-            {renderActionCard('download', 'Receive', 'Wait for incoming', () => router.push('/radar'), '#2196F3')}
+            {renderActionCard('upload', 'Send', 'Share files now', () => router.push('/radar'), '#4CAF50')}
+          {renderActionCard('download', 'Receive', 'Wait for incoming', () => router.push('/radar'), '#2196F3')}
           </View>
         </View>
 
