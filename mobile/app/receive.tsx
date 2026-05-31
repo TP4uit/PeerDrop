@@ -1,8 +1,58 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  useWindowDimensions,
+  Animated,
+  Easing,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+const RadarWave = ({ delay }: { delay: number }) => {
+  const anim = useRef(new Animated.Value(0)).current;
 
+  useEffect(() => {
+    const start = () => {
+      anim.setValue(0);
+
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 5000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }).start(() => start());
+    };
+
+    const timer = setTimeout(start, delay);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  const scale = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 3.2],
+  });
+
+  const opacity = anim.interpolate({
+    inputRange: [0, 0.15, 0.8, 1],
+    outputRange: [0.7, 0.4, 0.15, 0],
+  });
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.wave,
+        {
+          opacity,
+          transform: [{ scale }],
+        },
+      ]}
+    />
+  );
+};
 export default function ReceiveScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -38,16 +88,33 @@ export default function ReceiveScreen() {
           Your device is currently visible to nearby users as Alex's iPhone
         </Text>
 
-        <View style={[styles.radarContainer, { width: radarSize, height: radarSize }]}>  
-          <View style={styles.radarOuter} />
-          <View style={styles.radarMiddle} />
-          <View style={styles.radarInner} />
-          <View style={styles.centerPulse} />
-          <View style={styles.centerCircle}>
-            <View style={styles.centerIcon}>
-              <MaterialCommunityIcons name="cellphone" size={40} color="#8AF7B5" />
+        <View
+            style={[
+                styles.radarContainer,
+                {
+                width: radarSize,
+                height: radarSize,
+                },
+            ]}
+            >
+            {Array.from({ length: 5 }).map((_, index) => (
+                <RadarWave
+                key={index}
+                delay={index * 1000}
+                />
+            ))}
+
+            <View style={styles.centerGlow} />
+
+            <View style={styles.centerCircle}>
+                <View style={styles.centerIcon}>
+                <MaterialCommunityIcons
+                    name="cellphone"
+                    size={40}
+                    color="#8AF7B5"
+                />
+                </View>
             </View>
-          </View>
         </View>
 
         {isWaiting ? (
@@ -151,47 +218,43 @@ const styles = StyleSheet.create({
     position: 'relative',
     marginBottom: 28,
   },
-  radarOuter: {
+  wave: {
     position: 'absolute',
-    width: '100%',
-    height: '100%',
-    borderRadius: 200,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 255, 153, 0.12)',
-  },
-  radarMiddle: {
+    width: 120,
+    height: 120,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'rgba(0,225,155,0.35)',
+    },
+
+    centerGlow: {
     position: 'absolute',
-    width: '75%',
-    height: '75%',
-    borderRadius: 160,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 225, 155, 0.18)',
-  },
-  radarInner: {
-    position: 'absolute',
-    width: '50%',
-    height: '50%',
-    borderRadius: 120,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 255, 153, 0.24)',
-  },
-  centerPulse: {
-    position: 'absolute',
-    width: '22%',
-    height: '22%',
-    borderRadius: 100,
-    backgroundColor: 'rgba(0, 255, 153, 0.14)',
-  },
+    width: 140,
+    height: 140,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,225,155,0.08)',
+    },
   centerCircle: {
     width: 112,
     height: 112,
-    borderRadius: 60,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 255, 153, 0.24)',
+    borderRadius: 56,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(7, 24, 57, 0.95)',
-  },
+
+    borderWidth: 1,
+    borderColor: 'rgba(0,225,155,0.25)',
+
+    backgroundColor: 'rgba(7,24,57,0.98)',
+
+    shadowColor: '#00E19B',
+    shadowOffset: {
+        width: 0,
+        height: 0,
+    },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 10,
+    },
   centerIcon: {
     width: 72,
     height: 72,
