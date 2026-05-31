@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   useWindowDimensions,
+  Animated,
+  Easing,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -41,6 +43,56 @@ const mockDevices: AppDevice[] = [
   },
 ];
 
+const RadarWave = ({
+  delay,
+}: {
+  delay: number;
+}) => {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const start = () => {
+      anim.setValue(0);
+
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 5000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }).start(() => {
+        start();
+      });
+    };
+
+    const timer = setTimeout(start, delay);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  const scale = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 3.2],
+  });
+
+  const opacity = anim.interpolate({
+    inputRange: [0, 0.1, 0.7, 1],
+    outputRange: [0.8, 0.5, 0.15, 0],
+  });
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.wave,
+        {
+          opacity,
+          transform: [{ scale }],
+        },
+      ]}
+    />
+  );
+};
+
 export default function RadarScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -69,28 +121,58 @@ export default function RadarScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <MaterialCommunityIcons name="chevron-left" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Send Mode</Text>
+        <Text style={styles.headerTitle}>Searching...</Text>
         <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.body}>
-        <Text style={styles.searchLabel}>Looking for nearby receivers</Text>
+        <Text style={styles.searchLabel}>Looking for nearby devices</Text>
 
-        <View style={[styles.radarContainer, { width: radarSize, height: radarSize }]}>            
-          <View style={styles.radarOuter} />
-          <View style={styles.radarMiddle} />
-          <View style={styles.radarInner} />
-          <View style={styles.centerPulse} />
+        <View
+          style={[
+            styles.radarContainer,
+            {
+              width: radarSize,
+              height: radarSize,
+            },
+          ]}
+        >
+          {/* Radar waves */}
+          {Array.from({ length: 5}).map((_, index) => (
+            <RadarWave
+              key={index}
+              delay={index * 1000}
+            />
+          ))}
+          
+
+          {/* Center glow */}
+          <View style={styles.centerGlow} />
+
+          {/* Avatar */}
           <View style={styles.centerCircle}>
             <View style={styles.centerIcon}>
-              <MaterialCommunityIcons name="account-circle" size={40} color="#C6F8E1" />
+              <MaterialCommunityIcons
+                name="account-circle"
+                size={42}
+                color="#C6F8E1"
+              />
             </View>
           </View>
 
+          {/* Devices */}
           {mockDevices.map((device) => {
             const radians = (device.position.angle * Math.PI) / 180;
-            const dx = Math.cos(radians) * device.position.radius * radarSize;
-            const dy = Math.sin(radians) * device.position.radius * radarSize;
+
+            const dx =
+              Math.cos(radians) *
+              device.position.radius *
+              radarSize;
+
+            const dy =
+              Math.sin(radians) *
+              device.position.radius *
+              radarSize;
 
             return (
               <TouchableOpacity
@@ -103,20 +185,30 @@ export default function RadarScreen() {
                     left: centerOffset + dx - bubbleWidth / 2,
                   },
                 ]}
-                activeOpacity={0.8}
+                activeOpacity={0.85}
                 onPress={() => handleDevicePress(device)}
               >
-              <View style={styles.deviceAvatar}>
-                <MaterialCommunityIcons
-                  name={device.type === 'phone' ? 'cellphone' : device.type === 'tablet' ? 'tablet' : 'laptop'}
-                  size={22}
-                  color="#FFFFFF"
-                />
-              </View>
-              <Text style={styles.deviceLabel} numberOfLines={1}>
-                {device.name}
-              </Text>
-            </TouchableOpacity>
+                <View style={styles.deviceAvatar}>
+                  <MaterialCommunityIcons
+                    name={
+                      device.type === 'phone'
+                        ? 'cellphone'
+                        : device.type === 'tablet'
+                        ? 'tablet'
+                        : 'laptop'
+                    }
+                    size={22}
+                    color="#FFFFFF"
+                  />
+                </View>
+
+                <Text
+                  style={styles.deviceLabel}
+                  numberOfLines={1}
+                >
+                  {device.name}
+                </Text>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -176,67 +268,72 @@ const styles = StyleSheet.create({
     position: 'relative',
     marginBottom: 28,
   },
-  radarOuter: {
+  wave: {
     position: 'absolute',
-    width: '100%',
-    height: '100%',
-    borderRadius: 200,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 193, 255, 0.12)',
+    width: 120,
+    height: 120,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: 'rgba(0,225,155,0.55)',
   },
-  radarMiddle: {
+
+  centerGlow: {
     position: 'absolute',
-    width: '75%',
-    height: '75%',
-    borderRadius: 160,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 193, 255, 0.14)',
+    width: 140,
+    height: 140,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,225,155,0.08)',
   },
-  radarInner: {
-    position: 'absolute',
-    width: '50%',
-    height: '50%',
-    borderRadius: 120,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 193, 255, 0.2)',
-  },
-  centerPulse: {
-    position: 'absolute',
-    width: '22%',
-    height: '22%',
-    borderRadius: 100,
-    backgroundColor: 'rgba(0, 255, 153, 0.12)',
-  },
+
   centerCircle: {
     width: 112,
     height: 112,
-    borderRadius: 60,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 225, 155, 0.24)',
+    borderRadius: 56,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(7, 24, 57, 0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(0,225,155,0.25)',
+    backgroundColor: 'rgba(7,24,57,0.98)',
+    shadowColor: '#00E19B',
+    shadowOffset: {
+      width: 0,
+      height: 0,
+    },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 10,
   },
+
   centerIcon: {
     width: 72,
     height: 72,
-    borderRadius: 40,
+    borderRadius: 36,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 193, 255, 0.18)',
+    backgroundColor: 'rgba(0,193,255,0.18)',
   },
-
+  
   deviceBubble: {
     position: 'absolute',
     minWidth: 94,
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: 24,
-    backgroundColor: 'rgba(6, 18, 51, 0.95)',
+    backgroundColor: 'rgba(10,25,60,0.98)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center',
+
+    shadowColor: '#00E19B',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
   },
+
   deviceAvatar: {
     width: 42,
     height: 42,
