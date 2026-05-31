@@ -102,6 +102,9 @@ export default function HomeScreen() {
                 <Text style={styles.statusText}>Online • Ready to share</Text>
               </View>
             </View>
+            <TouchableOpacity onPress={() => router.push('/settings')} style={styles.settingsButton}>
+              <MaterialCommunityIcons name="dots-vertical" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
           </View>
 
           <View style={styles.actionRow}>
@@ -165,6 +168,9 @@ const styles = StyleSheet.create({
   },
   profileText: {
     flex: 1,
+  },
+  settingsButton: {
+    padding: 8,
   },
   profileName: {
     color: '#FFFFFF',
