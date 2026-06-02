@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { clearTransferHistory } from '@/utils/transferHistory';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -32,7 +33,8 @@ export default function SettingsScreen() {
         { text: 'Cancel', onPress: () => {}, style: 'cancel' },
         {
           text: 'Clear',
-          onPress: () => {
+          onPress: async () => {
+            await clearTransferHistory();
             Alert.alert('Success', 'Transfer history has been cleared.');
           },
           style: 'destructive',

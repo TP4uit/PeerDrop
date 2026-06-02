@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,9 @@ import {
   FlatList,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { loadTransferHistory } from '@/utils/transferHistory';
 
 interface RecentTransfer {
   id: string;
@@ -19,35 +21,28 @@ interface RecentTransfer {
   status: 'completed' | 'failed' | 'pending';
 }
 
-const recentTransfers: RecentTransfer[] = [
-  {
-    id: '1',
-    fileName: 'Project_Proposal_v2.pdf',
-    device: "Sarah's MacBook",
-    date: 'Today, 14:30',
-    size: '2.4 MB',
-    status: 'completed',
-  },
-  {
-    id: '2',
-    fileName: 'Vacation_Photos.zip',
-    device: 'Alex’s iPhone',
-    date: 'Yesterday',
-    size: '18.0 MB',
-    status: 'completed',
-  },
-  {
-    id: '3',
-    fileName: 'Design_Guide.sketch',
-    device: 'Office iPad',
-    date: 'Yesterday',
-    size: '5.8 MB',
-    status: 'pending',
-  },
-];
-
 export default function HomeScreen() {
   const router = useRouter();
+  const [recentTransfers, setRecentTransfers] = useState<RecentTransfer[]>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      const refreshHistory = async () => {
+        const history = await loadTransferHistory();
+        if (active) {
+          setRecentTransfers(history);
+        }
+      };
+
+      refreshHistory();
+
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
   const renderActionCard = (
     icon: string,
@@ -115,8 +110,8 @@ export default function HomeScreen() {
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Transfers</Text>
-          <TouchableOpacity>
-            <Text style={styles.sectionAction}>See all</Text>
+          <TouchableOpacity onPress={() => router.push('/settings')}>
+            <Text style={styles.sectionAction}>Manage</Text>
           </TouchableOpacity>
         </View>
 
@@ -125,6 +120,14 @@ export default function HomeScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderTransferItem}
           scrollEnabled={false}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No recent transfers yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Send or receive a file to see it appear here.
+              </Text>
+            </View>
+          }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           contentContainerStyle={styles.transferList}
         />
@@ -245,6 +248,23 @@ const styles = StyleSheet.create({
   },
   transferList: {
     paddingBottom: 40,
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    color: '#96A0C7',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 20,
+    paddingHorizontal: 20,
   },
   transferRow: {
     flexDirection: 'row',

@@ -20,6 +20,7 @@ import Animated, {
   withSequence,
 } from 'react-native-reanimated';
 import CircularProgress from '@/components/ui/CircularProgress';
+import { addTransferHistoryItem } from '@/utils/transferHistory';
 
 interface TransferStats {
   speed: string; // MB/s
@@ -108,7 +109,16 @@ export default function TransferScreen() {
     left: `${segmentOffset.value}%`,
   }));
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
+    await addTransferHistoryItem({
+      id: `${Date.now()}`,
+      fileName: `${fileCount} file${fileCount === '1' ? '' : 's'}`,
+      device: (deviceName as string) || 'Unknown Device',
+      date: new Date().toLocaleString(),
+      size: (totalSize as string) || '0 MB',
+      status: 'completed',
+    });
+
     router.dismissAll();
     router.push('/');
   };
