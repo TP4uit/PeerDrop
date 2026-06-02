@@ -5,8 +5,10 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   Easing,
+  useAnimatedProps,
 } from 'react-native-reanimated';
 import Svg, { Circle } from 'react-native-svg';
+
 
 interface CircularProgressProps {
   percentage: number; // 0-100
@@ -15,6 +17,8 @@ interface CircularProgressProps {
   label?: string;
   speed?: number;
 }
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 export default function CircularProgress({
   percentage,
@@ -34,6 +38,10 @@ export default function CircularProgress({
     });
   }, [percentage]);
 
+  const animatedCircleProps = useAnimatedProps(() => ({
+  strokeDashoffset: offset.value,
+  }));
+
   return (
     <View style={styles.container}>
       <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
@@ -48,19 +56,19 @@ export default function CircularProgress({
             fill="none"
           />
           {/* Progress circle */}
-          <Animated.Circle
+          <AnimatedCircle
             cx={size / 2}
             cy={size / 2}
             r={radius}
-            stroke="#0084FF"
+            stroke="#00FF41"
             strokeWidth={strokeWidth}
             fill="none"
             strokeDasharray={circumference}
-            strokeDashoffset={offset}
+            animatedProps={animatedCircleProps}
             strokeLinecap="round"
           />
         </Svg>
-
+        {/*strokeDashoffset={offset} */}
         {/* Center text */}
         <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
           <Text style={styles.percentage}>{percentage}%</Text>
@@ -79,11 +87,11 @@ const styles = StyleSheet.create({
   percentage: {
     fontSize: 36,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: '#00FF66',
   },
   label: {
     fontSize: 12,
-    color: '#999',
+    color: '#8E9BB4',
     marginTop: 4,
   },
 });

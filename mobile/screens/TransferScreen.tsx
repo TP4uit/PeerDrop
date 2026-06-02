@@ -17,7 +17,7 @@ import Animated, {
   Easing,
   withSequence,
 } from 'react-native-reanimated';
-import CircularProgress from '../components/ui/CircularProgress';
+import CircularProgress   from '@/components/ui/CircularProgress';
 
 interface TransferStats {
   speed: string; // MB/s
@@ -161,7 +161,7 @@ export default function TransferScreen() {
           strokeWidth={10}
           label={isTransferring ? 'In Progress' : 'Completed'}
           speed={300}
-        />
+        /> 
       </View>
 
       {/* File Info */}
