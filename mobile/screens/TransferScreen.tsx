@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   ScrollView,
   useWindowDimensions,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -17,7 +19,7 @@ import Animated, {
   Easing,
   withSequence,
 } from 'react-native-reanimated';
-import CircularProgress   from '@/components/ui/CircularProgress';
+import CircularProgress from '@/components/ui/CircularProgress';
 
 interface TransferStats {
   speed: string; // MB/s
@@ -33,15 +35,18 @@ export default function TransferScreen() {
 
   const [progress, setProgress] = useState(0);
   const [isTransferring, setIsTransferring] = useState(true);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [stats, setStats] = useState<TransferStats>({
     speed: '12.5 MB/s',
     timeRemaining: '8s',
     transferred: '95 MB',
-    total: totalSize as string,
+    total: (totalSize as string) || '0 MB',
   });
 
   // Animation for connection line
   const lineOpacity = useSharedValue(0.3);
+  const segmentOffset = useSharedValue(0);
 
   useEffect(() => {
     lineOpacity.value = withRepeat(
@@ -52,29 +57,37 @@ export default function TransferScreen() {
       -1,
       true
     );
+
+    segmentOffset.value = withRepeat(
+      withTiming(100, { duration: 1800, easing: Easing.linear }),
+      -1,
+      false
+    );
   }, []);
 
-  // Simulate transfer progress
+  // Simulate transfer progress (pausable)
   useEffect(() => {
     if (progress >= 100) {
       setIsTransferring(false);
       return;
     }
 
+    if (!isTransferring || isPaused) return;
+
     const interval = setInterval(() => {
       setProgress((prev) => {
-        const nextProgress = prev + Math.random() * 15;
+        const nextProgress = prev + Math.random() * 12 + 4;
         return nextProgress >= 100 ? 100 : nextProgress;
       });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [progress]);
+  }, [progress, isTransferring, isPaused]);
 
   // Update stats based on progress
   useEffect(() => {
     if (totalSize) {
-      const totalNum = parseFloat(totalSize as string);
+      const totalNum = parseFloat(totalSize as string) || 0;
       const transferred = (totalNum * progress) / 100;
       const timeRemaining = progress > 0 ? Math.ceil((100 - progress) / 20) : 0;
 
@@ -91,9 +104,34 @@ export default function TransferScreen() {
     opacity: lineOpacity.value,
   }));
 
+  const animatedSegmentStyle = useAnimatedStyle(() => ({
+    left: `${segmentOffset.value}%`,
+  }));
+
   const handleComplete = () => {
     router.dismissAll();
     router.push('/');
+  };
+
+  const handlePauseToggle = () => {
+    setIsPaused((s) => !s);
+  };
+
+  const handleCancelPress = () => {
+    setShowCancelConfirm(true);
+  };
+
+  const confirmCancel = () => {
+    setShowCancelConfirm(false);
+    setIsTransferring(false);
+    setProgress(0);
+    router.push('/');
+  };
+
+  const handleSendAgain = () => {
+    setProgress(0);
+    setIsTransferring(true);
+    setIsPaused(false);
   };
 
   return (
@@ -101,7 +139,7 @@ export default function TransferScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>
-          {isTransferring ? 'Transferring Files' : 'Transfer Complete'}
+          {isTransferring ? 'Transferring' : 'Transfer Complete'}
         </Text>
       </View>
 
@@ -109,45 +147,21 @@ export default function TransferScreen() {
       <View style={[styles.connectionContainer, { width: width - 32 }]}>
         {/* Sender (This Device) */}
         <View style={styles.deviceContainer}>
-          <View style={styles.deviceCircle}>
-            <MaterialCommunityIcons
-              name="devices"
-              size={32}
-              color="#0084FF"
-            />
+          <View style={[styles.deviceCircle, styles.deviceCircleSender]}>
+            <MaterialCommunityIcons name="account-circle" size={32} color="#00E19B" />
           </View>
-          <Text style={styles.deviceLabel}>This Device</Text>
+          <Text style={styles.deviceLabel}>You</Text>
         </View>
 
-        {/* Connection Line */}
-        <Animated.View
-          style={[
-            styles.connectionLine,
-            animatedLineStyle,
-          ]}
-        >
-          {/* Animated dots */}
-          {[0, 1, 2].map((i) => (
-            <Animated.View
-              key={i}
-              style={[
-                styles.connectionDot,
-                {
-                  left: `${(i * 33 + progress / 3) % 100}%`,
-                },
-              ]}
-            />
-          ))}
+        {/* Connection Line with moving green segment */}
+        <Animated.View style={[styles.connectionLine, animatedLineStyle]}>
+          <Animated.View style={[styles.connectionProgress, animatedSegmentStyle]} />
         </Animated.View>
 
         {/* Receiver */}
         <View style={styles.deviceContainer}>
-          <View style={styles.deviceCircle}>
-            <MaterialCommunityIcons
-              name="cellphone"
-              size={32}
-              color="#4CAF50"
-            />
+          <View style={[styles.deviceCircle, styles.deviceCircleReceiver]}>
+            <MaterialCommunityIcons name="cellphone" size={32} color="#4CAF50" />
           </View>
           <Text style={styles.deviceLabel}>{deviceName}</Text>
         </View>
@@ -161,7 +175,7 @@ export default function TransferScreen() {
           strokeWidth={10}
           label={isTransferring ? 'In Progress' : 'Completed'}
           speed={300}
-        /> 
+        />
       </View>
 
       {/* File Info */}
@@ -173,42 +187,10 @@ export default function TransferScreen() {
         <View style={styles.fileInfoDivider} />
         <View style={styles.fileInfoRow}>
           <Text style={styles.fileInfoLabel}>Total Size</Text>
-          <Text style={styles.fileInfoValue}>{totalSize}</Text>
-        </View>
-      </View>
-
-      {/* Transfer Stats */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statItem}>
-          <MaterialCommunityIcons
-            name="speedometer"
-            size={20}
-            color="#0084FF"
-          />
-          <View style={styles.statContent}>
-            <Text style={styles.statLabel}>Speed</Text>
-            <Text style={styles.statValue}>{stats.speed}</Text>
-          </View>
         </View>
 
         <View style={styles.statItem}>
-          <MaterialCommunityIcons
-            name="clock-outline"
-            size={20}
-            color="#FF9800"
-          />
-          <View style={styles.statContent}>
-            <Text style={styles.statLabel}>Time Remaining</Text>
-            <Text style={styles.statValue}>{stats.timeRemaining}</Text>
-          </View>
-        </View>
-
-        <View style={styles.statItem}>
-          <MaterialCommunityIcons
-            name="cloud-upload-outline"
-            size={20}
-            color="#2196F3"
-          />
+          <MaterialCommunityIcons name="cloud-upload-outline" size={20} color="#2196F3" />
           <View style={styles.statContent}>
             <Text style={styles.statLabel}>Transferred</Text>
             <Text style={styles.statValue}>
@@ -222,47 +204,46 @@ export default function TransferScreen() {
       <View style={styles.actionsContainer}>
         {isTransferring ? (
           <>
-            <TouchableOpacity style={styles.pauseButton}>
-              <MaterialCommunityIcons
-                name="pause"
-                size={20}
-                color="#0084FF"
-              />
-              <Text style={styles.pauseButtonText}>Pause</Text>
+            <TouchableOpacity style={styles.pauseButton} onPress={handlePauseToggle}>
+              <MaterialCommunityIcons name={isPaused ? 'play' : 'pause'} size={20} color="#00E19B" />
+              <Text style={styles.pauseButtonText}>{isPaused ? 'Resume' : 'Pause'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.cancelButton}>
-              <MaterialCommunityIcons
-                name="close"
-                size={20}
-                color="#F44336"
-              />
+            <TouchableOpacity style={styles.cancelButton} onPress={handleCancelPress}>
+              <MaterialCommunityIcons name="close" size={20} color="#F44336" />
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
           </>
         ) : (
           <>
-            <TouchableOpacity style={styles.repeatButton}>
-              <MaterialCommunityIcons
-                name="repeat"
-                size={20}
-                color="#0084FF"
-              />
+            <TouchableOpacity style={styles.repeatButton} onPress={handleSendAgain}>
+              <MaterialCommunityIcons name="repeat" size={20} color="#00E19B" />
               <Text style={styles.repeatButtonText}>Send Again</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.doneButton}
-              onPress={handleComplete}
-            >
-              <MaterialCommunityIcons
-                name="check-circle"
-                size={20}
-                color="#FFF"
-              />
+            <TouchableOpacity style={styles.doneButton} onPress={handleComplete}>
+              <MaterialCommunityIcons name="check-circle" size={20} color="#FFF" />
               <Text style={styles.doneButtonText}>Done</Text>
             </TouchableOpacity>
           </>
         )}
       </View>
+
+      {/* Cancel confirmation modal */}
+      <Modal visible={showCancelConfirm} transparent animationType="fade" onRequestClose={() => setShowCancelConfirm(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Cancel Transfer?</Text>
+            <Text style={styles.modalMessage}>Are you sure you want to cancel the transfer?</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalButtonSecondary} onPress={() => setShowCancelConfirm(false)}>
+                <Text style={styles.modalButtonSecondaryText}>No, Continue</Text>
+              </Pressable>
+              <Pressable style={styles.modalButtonPrimary} onPress={confirmCancel}>
+                <Text style={styles.modalButtonPrimaryText}>Yes, Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -270,19 +251,17 @@ export default function TransferScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FAFAFA',
+    backgroundColor: '#05091B',
   },
   header: {
     paddingHorizontal: 16,
     paddingVertical: 20,
-    backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    backgroundColor: 'transparent',
   },
   headerTitle: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: '#FFFFFF',
     textAlign: 'center',
   },
   connectionContainer: {
@@ -292,7 +271,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginVertical: 24,
     paddingVertical: 24,
-    backgroundColor: '#FFF',
+    backgroundColor: '#0B1330',
     borderRadius: 16,
     paddingHorizontal: 16,
   },
@@ -303,22 +282,28 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: 'rgba(0, 132, 255, 0.1)',
+    backgroundColor: '#071328',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
   },
+  deviceCircleSender: {
+    backgroundColor: 'rgba(0,225,155,0.08)',
+  },
+  deviceCircleReceiver: {
+    backgroundColor: 'rgba(76,175,80,0.08)',
+  },
   deviceLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: '#E6F0FF',
     textAlign: 'center',
     maxWidth: 70,
   },
   connectionLine: {
     flex: 1,
     height: 3,
-    backgroundColor: '#0084FF',
+    backgroundColor: 'rgba(0,225,155,0.12)',
     marginHorizontal: 8,
     position: 'relative',
     overflow: 'hidden',
@@ -328,8 +313,28 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#FFF',
+    backgroundColor: '#00E19B',
     top: -2.5,
+  },
+  connectionProgressContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: -6,
+    height: 12,
+    justifyContent: 'center',
+  },
+  connectionProgress: {
+    position: 'absolute',
+    width: 48,
+    height: 8,
+    borderRadius: 6,
+    backgroundColor: '#00E19B',
+    shadowColor: '#00E19B',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 6,
   },
   progressSection: {
     alignItems: 'center',
@@ -338,15 +343,10 @@ const styles = StyleSheet.create({
   fileInfoCard: {
     marginHorizontal: 16,
     marginVertical: 16,
-    backgroundColor: '#FFF',
+    backgroundColor: '#081026',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 4,
-    elevation: 2,
   },
   fileInfoRow: {
     flexDirection: 'row',
@@ -356,31 +356,26 @@ const styles = StyleSheet.create({
   },
   fileInfoLabel: {
     fontSize: 13,
-    color: '#999',
+    color: '#7B8AA3',
     fontWeight: '500',
   },
   fileInfoValue: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: '#FFFFFF',
   },
   fileInfoDivider: {
     height: 1,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: '#0F1A2B',
     marginVertical: 4,
   },
   statsContainer: {
     marginHorizontal: 16,
     marginVertical: 16,
-    backgroundColor: '#FFF',
+    backgroundColor: '#081026',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 4,
-    elevation: 2,
   },
   statItem: {
     flexDirection: 'row',
@@ -393,13 +388,13 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     fontSize: 12,
-    color: '#999',
+    color: '#7B8AA3',
     marginBottom: 2,
   },
   statValue: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: '#FFFFFF',
   },
   actionsContainer: {
     flexDirection: 'row',
@@ -415,14 +410,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     borderRadius: 10,
-    backgroundColor: '#FFF',
+    backgroundColor: '#071328',
     borderWidth: 1,
-    borderColor: '#0084FF',
+    borderColor: 'rgba(0,225,155,0.18)',
   },
   pauseButtonText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#0084FF',
+    color: '#00E19B',
     marginLeft: 6,
   },
   cancelButton: {
@@ -432,9 +427,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     borderRadius: 10,
-    backgroundColor: '#FFF',
+    backgroundColor: '#071328',
     borderWidth: 1,
-    borderColor: '#F44336',
+    borderColor: 'rgba(244,67,54,0.18)',
   },
   cancelButtonText: {
     fontSize: 14,
@@ -449,14 +444,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     borderRadius: 10,
-    backgroundColor: '#FFF',
+    backgroundColor: '#071328',
     borderWidth: 1,
-    borderColor: '#0084FF',
+    borderColor: 'rgba(0,225,155,0.18)',
   },
   repeatButtonText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#0084FF',
+    color: '#00E19B',
     marginLeft: 6,
   },
   doneButton: {
@@ -466,12 +461,63 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     borderRadius: 10,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#00E19B',
   },
   doneButtonText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#FFF',
+    color: '#051122',
     marginLeft: 6,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#071428',
+    borderRadius: 12,
+    padding: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginBottom: 8,
+  },
+  modalMessage: {
+    fontSize: 14,
+    color: '#9FB1C9',
+    marginBottom: 16,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  modalButtonPrimary: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#F44336',
+    borderRadius: 8,
+  },
+  modalButtonPrimaryText: {
+    color: '#FFF',
+    fontWeight: '700',
+  },
+  modalButtonSecondary: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: 'transparent',
+    borderRadius: 8,
+    marginRight: 8,
+  },
+  modalButtonSecondaryText: {
+    color: '#00E19B',
+    fontWeight: '700',
   },
 });

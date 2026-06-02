@@ -214,10 +214,12 @@ export default function RadarScreen() {
         </View>
       </View>
 
-      <TouchableOpacity style={styles.qrButton} onPress={() => router.push('/file-selection')}>
-        <MaterialCommunityIcons name="qrcode-scan" size={20} color="#00E19B" />
-        <Text style={styles.qrButtonText}>Scan QR Code instead</Text>
-      </TouchableOpacity>
+      <View style={styles.qrActions}>
+        <TouchableOpacity style={styles.qrButton} onPress={() => router.push('/scan')}>
+          <MaterialCommunityIcons name="qrcode-scan" size={20} color="#00E19B" />
+          <Text style={styles.qrButtonText}>Scan QR Code with camera</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -356,6 +358,12 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     maxWidth: 280,
   },
+  qrActions: {
+    width: '100%',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 24,
+  },
   qrButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -363,12 +371,24 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     width: '90%',
     maxWidth: 420,
-    marginBottom: 24,
     paddingVertical: 16,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(0, 225, 155, 0.22)',
     backgroundColor: 'rgba(0, 225, 155, 0.08)',
+  },
+  qrButtonSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    width: '90%',
+    maxWidth: 420,
+    paddingVertical: 16,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 225, 155, 0.18)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
   qrButtonText: {
     color: '#00E19B',

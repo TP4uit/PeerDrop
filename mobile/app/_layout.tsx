@@ -31,6 +31,14 @@ export default function RootLayout() {
         options={{ title: 'Select Files' }}
       />
       <Stack.Screen
+        name="scan"
+        options={{ title: 'Scan QR' }}
+      />
+      <Stack.Screen
+        name="scan-image"
+        options={{ title: 'Choose QR Image' }}
+      />
+      <Stack.Screen
         name="transfer"
         options={{ title: 'Transfer' }}
       />

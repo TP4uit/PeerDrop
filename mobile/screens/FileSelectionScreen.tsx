@@ -42,7 +42,7 @@ const mockFiles: FileItem[] = [
   { id: '12', name: 'Podcast.mp3', size: '9.8 MB', type: 'audio', color: '#2945D8', selected: false },
 ];
 
-const iconByType: Record<FileItem['type'], string> = {
+const iconByType: Record<FileItem['type'], React.ComponentProps<typeof MaterialCommunityIcons>['name']> = {
   image: 'image',
   video: 'video',
   document: 'file-document',
