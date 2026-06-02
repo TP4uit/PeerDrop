@@ -11,14 +11,33 @@ export default function RootLayout() {
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor },
-        animationEnabled: true,
-        animationTypeForReplace: true,
+        animation: 'slide_from_right',
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Home' }} />
-      <Stack.Screen name="radar" options={{ title: 'Radar' }} />
-      <Stack.Screen name="file-selection" options={{ title: 'Select Files' }} />
-      <Stack.Screen name="transfer" options={{ title: 'Transfer' }} />
+      <Stack.Screen
+        name="index"
+        options={{ title: 'Home' }}
+      />
+      <Stack.Screen
+        name="radar"
+        options={{ title: 'Radar' }}
+      />
+      <Stack.Screen
+        name="receive"
+        options={{ title: 'Receive' }}
+      />
+      <Stack.Screen
+        name="file-selection"
+        options={{ title: 'Select Files' }}
+      />
+      <Stack.Screen
+        name="transfer"
+        options={{ title: 'Transfer' }}
+      />
+      <Stack.Screen
+        name="settings"
+        options={{ title: 'Settings' }}
+      />
     </Stack>
   );
 }
