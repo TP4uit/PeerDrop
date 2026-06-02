@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { loadTransferHistory } from '@/utils/transferHistory';
+import { socketService } from '../services/socket.service';
 
 interface RecentTransfer {
   id: string;
@@ -24,6 +25,26 @@ interface RecentTransfer {
 export default function HomeScreen() {
   const router = useRouter();
   const [recentTransfers, setRecentTransfers] = useState<RecentTransfer[]>([]);
+  const [nickname, setNickname] = useState<string>('Đang tải...');
+
+  
+useEffect(() => {
+    const setupConnection = async () => {
+      // Đợi định danh và kết nối mạng
+      await socketService.connect();
+      
+      // Gán tên thật vừa lấy được (A16 của Phúc) vào State để UI tự động đổi
+      setNickname(socketService.nickname);
+      
+      // (ĐÃ XÓA dòng socketService.joinRoom('1234') ở đây để hết bị báo WARN)
+    };
+
+    setupConnection();
+
+    return () => {
+      socketService.disconnect();
+    };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -91,7 +112,7 @@ export default function HomeScreen() {
               <MaterialCommunityIcons name="account-circle" size={46} color="#FFFFFF" />
             </View>
             <View style={styles.profileText}>
-              <Text style={styles.profileName}>Alex's iPhone</Text>
+              <Text style={styles.profileName}>{nickname}</Text>
               <View style={styles.statusRow}>
                 <View style={styles.onlineDot} />
                 <Text style={styles.statusText}>Online • Ready to share</Text>
