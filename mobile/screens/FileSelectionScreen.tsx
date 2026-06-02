@@ -6,41 +6,30 @@ import {
   FlatList,
   TouchableOpacity,
   useWindowDimensions,
+  Alert,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 
 interface FileItem {
   id: string;
+  uri: string;
   name: string;
-  size: string;
+  size: number;
   type: 'image' | 'video' | 'document' | 'audio';
   color: string;
   selected: boolean;
 }
 
-const fileTabs = ['Photos', 'Videos', 'Documents', 'Music'] as const;
+const fileTabs = ['All', 'Photos', 'Videos', 'Documents', 'Music'] as const;
 const tabFilter: Record<typeof fileTabs[number], FileItem['type'][]> = {
+  All: ['image', 'video', 'document', 'audio'],
   Photos: ['image'],
   Videos: ['video'],
   Documents: ['document'],
   Music: ['audio'],
 };
-
-const mockFiles: FileItem[] = [
-  { id: '1', name: 'Sunset.png', size: '6.1 MB', type: 'image', color: '#3058FF', selected: false },
-  { id: '2', name: 'City Lights.jpg', size: '4.5 MB', type: 'image', color: '#3E6BFF', selected: false },
-  { id: '3', name: 'Abstract Art.jpg', size: '3.9 MB', type: 'image', color: '#1D3AE8', selected: false },
-  { id: '4', name: 'Night Sky.png', size: '5.4 MB', type: 'image', color: '#2A47DD', selected: false },
-  { id: '5', name: 'Forest Path.jpg', size: '4.8 MB', type: 'image', color: '#4A74FF', selected: false },
-  { id: '6', name: 'Portrait.jpg', size: '3.2 MB', type: 'image', color: '#1F43CE', selected: false },
-  { id: '7', name: 'Travel.mp4', size: '34 MB', type: 'video', color: '#0047BA', selected: false },
-  { id: '8', name: 'Meeting.mp4', size: '21 MB', type: 'video', color: '#1862D6', selected: false },
-  { id: '9', name: 'Report.pdf', size: '2.8 MB', type: 'document', color: '#2F4BE8', selected: false },
-  { id: '10', name: 'Invoice.pdf', size: '1.5 MB', type: 'document', color: '#1C34C7', selected: false },
-  { id: '11', name: 'Song.mp3', size: '5.1 MB', type: 'audio', color: '#1A60FF', selected: false },
-  { id: '12', name: 'Podcast.mp3', size: '9.8 MB', type: 'audio', color: '#2945D8', selected: false },
-];
 
 const iconByType: Record<FileItem['type'], React.ComponentProps<typeof MaterialCommunityIcons>['name']> = {
   image: 'image',
@@ -49,11 +38,63 @@ const iconByType: Record<FileItem['type'], React.ComponentProps<typeof MaterialC
   audio: 'music-note',
 };
 
+const typeColor: Record<FileItem['type'], string> = {
+  image: '#3058FF',
+  video: '#9D4DFF',
+  document: '#FF9B3D',
+  audio: '#4BC6D8',
+};
+
+const getItemType = (mimeType?: string | null, filename?: string | null): FileItem['type'] => {
+  const lowerName = filename?.toLowerCase() ?? '';
+  if (mimeType?.startsWith('image') || lowerName.match(/\.(jpg|jpeg|png|gif|heic|heif|webp)$/)) {
+    return 'image';
+  }
+  if (mimeType?.startsWith('video') || lowerName.match(/\.(mp4|mov|mkv|webm|avi|3gp)$/)) {
+    return 'video';
+  }
+  if (mimeType?.startsWith('audio') || lowerName.match(/\.(mp3|wav|m4a|aac|ogg)$/)) {
+    return 'audio';
+  }
+  return 'document';
+};
+
+const formatFileSize = (size: number) => {
+  if (!size) return '0 KB';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const normalizeDocuments = (result: any): FileItem[] => {
+  const output = (result as any).output ?? result;
+  const docs = Array.isArray(output) ? output : [output];
+
+  return docs
+    .filter(Boolean)
+    .map((doc: any) => {
+      const name = doc.name ?? doc.uri?.split('/').pop() ?? 'Unknown file';
+      const uri = doc.uri ?? '';
+      const size = typeof doc.size === 'number' ? doc.size : 0;
+      const type = getItemType(doc.mimeType, name);
+
+      return {
+        id: uri || `${name}-${Math.random().toString(36).slice(2)}`,
+        uri,
+        name,
+        size,
+        type,
+        color: typeColor[type],
+        selected: true,
+      };
+    });
+};
+
 export default function FileSelectionScreen() {
   const router = useRouter();
   const { deviceName } = useLocalSearchParams();
-  const [activeTab, setActiveTab] = useState<typeof fileTabs[number]>('Photos');
-  const [files, setFiles] = useState<FileItem[]>(mockFiles);
+  const [activeTab, setActiveTab] = useState<typeof fileTabs[number]>('All');
+  const [files, setFiles] = useState<FileItem[]>([]);
   const { width } = useWindowDimensions();
   const columnCount = 3;
   const itemSize = Math.floor((width - 44) / columnCount);
@@ -63,10 +104,46 @@ export default function FileSelectionScreen() {
   );
 
   const selectedCount = files.filter((f) => f.selected).length;
-  const totalSize = files
+  const totalBytes = files
     .filter((f) => f.selected)
-    .reduce((sum, f) => sum + parseFloat(f.size), 0)
-    .toFixed(1);
+    .reduce((sum, f) => sum + f.size, 0);
+  const totalSize = formatFileSize(totalBytes);
+
+  const pickFiles = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        multiple: true,
+        copyToCacheDirectory: false,
+      });
+
+      if ('type' in result && result.type === 'cancel') {
+        return;
+      }
+
+      const pickedFiles = normalizeDocuments(result);
+      if (pickedFiles.length === 0) {
+        return;
+      }
+
+      setFiles((current) => {
+        const existingUris = new Set(current.map((file) => file.uri));
+        const merged = [...current];
+
+        pickedFiles.forEach((file) => {
+          if (!existingUris.has(file.uri)) {
+            merged.push(file);
+            existingUris.add(file.uri);
+          }
+        });
+
+        return merged;
+      });
+    } catch (error) {
+      console.error(error);
+      Alert.alert('File Selection Error', 'Unable to select files. Please try again.');
+    }
+  };
 
   const toggleFile = (id: string) => {
     setFiles((current) =>
@@ -88,7 +165,7 @@ export default function FileSelectionScreen() {
         params: {
           deviceName,
           fileCount: selectedCount.toString(),
-          totalSize: `${totalSize} MB`,
+          totalSize,
         },
       });
     }
@@ -129,7 +206,7 @@ export default function FileSelectionScreen() {
         <Text style={styles.fileTitle} numberOfLines={1}>
           {item.name}
         </Text>
-        <Text style={styles.fileSubtitle}>{item.size}</Text>
+        <Text style={styles.fileSubtitle}>{formatFileSize(item.size)}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -153,6 +230,16 @@ export default function FileSelectionScreen() {
 
       <View style={styles.tabRow}>{fileTabs.map(renderTab)}</View>
 
+      <View style={styles.filePickerBar}>
+        <Text style={styles.pickerHint}>
+          Choose files from your device to send over the connection.
+        </Text>
+        <TouchableOpacity style={styles.pickButton} onPress={pickFiles}>
+          <MaterialCommunityIcons name="file-plus" size={18} color="#05091B" />
+          <Text style={styles.pickButtonText}>Choose Files</Text>
+        </TouchableOpacity>
+      </View>
+
       <FlatList
         data={displayedFiles}
         renderItem={renderFileItem}
@@ -160,6 +247,14 @@ export default function FileSelectionScreen() {
         numColumns={columnCount}
         columnWrapperStyle={styles.gridRow}
         contentContainerStyle={styles.gridContent}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>No files selected yet</Text>
+            <Text style={styles.emptySubtitle}>
+              Tap Choose Files above to pick real files from your device.
+            </Text>
+          </View>
+        }
         showsVerticalScrollIndicator={false}
       />
 
@@ -167,7 +262,7 @@ export default function FileSelectionScreen() {
         <View>
           <Text style={styles.bottomTitle}>Selected: {selectedCount} item{selectedCount !== 1 ? 's' : ''}</Text>
           <Text style={styles.bottomSubtitle}>
-            {selectedCount > 0 ? `${totalSize} MB total` : 'Tap files to start selecting'}
+            {selectedCount > 0 ? `${totalSize} total` : 'Choose files to start sending'}
           </Text>
         </View>
         <TouchableOpacity
@@ -253,6 +348,35 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: '#82F7B2',
   },
+  filePickerBar: {
+    marginHorizontal: 20,
+    marginBottom: 18,
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  pickerHint: {
+    color: '#A6B6E8',
+    fontSize: 13,
+    marginBottom: 12,
+    lineHeight: 20,
+  },
+  pickButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: '#82F7B2',
+  },
+  pickButtonText: {
+    marginLeft: 8,
+    color: '#05091B',
+    fontWeight: '700',
+    fontSize: 14,
+  },
   gridContent: {
     paddingHorizontal: 12,
     paddingBottom: 150,
@@ -300,6 +424,23 @@ const styles = StyleSheet.create({
     color: '#9DB1F1',
     fontSize: 11,
     marginTop: 4,
+  },
+  emptyState: {
+    marginTop: 40,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+  },
+  emptyTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    color: '#9DB1F1',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   bottomBar: {
     position: 'absolute',
