@@ -1,10 +1,16 @@
 import { io, Socket } from 'socket.io-client';
+import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Device from 'expo-device';
 
 // Tự động lấy IP của máy tính đang chạy Metro Bundler
 const getDevServerIP = () => {
+  // Nếu đang chạy trên máy ảo Android, luôn trả về IP đại diện cho localhost của máy host
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:3000';
+  }
+
   const hostUri = Constants.expoConfig?.hostUri;
   if (hostUri) {
     const machineIp = hostUri.split(':')[0];
