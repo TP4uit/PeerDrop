@@ -92,7 +92,7 @@ class WebRTCService {
     };
   }
 
-  // --- THUẬT TOÁN BĂM NHỎ VÀ GỬI FILE ---
+  // --- THUẬT TOÁN BĂM NHỎ VÀ GỬI FILE (BẢN VƯỢT RÀO REACT NATIVE) ---
   async sendFile(file: File) {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
       alert('Chưa kết nối đến máy nào! Vui lòng chọn máy trên Radar trước.');
@@ -105,22 +105,19 @@ class WebRTCService {
     const metadata = { name: file.name, size: file.size, fileType: file.type };
     this.dataChannel.send(JSON.stringify({ type: 'file-meta', metadata }));
 
-    // Bước 2: Băm nhỏ file thành từng mảnh 64KB
-    const chunkSize = 64 * 1024; 
+    // 🔥 CHÌA KHÓA 1: Giảm chunkSize xuống 16KB (Ngưỡng an toàn tuyệt đối của SCTP WebRTC)
+    const chunkSize = 16 * 1024; 
     const buffer = await file.arrayBuffer();
     let offset = 0;
 
-    // Bước 3: Hàm đệ quy gửi để chống tràn bộ đệm (Backpressure)
-    // Bước 3: Hàm đệ quy gửi để chống tràn bộ đệm (Backpressure)
+    // Bước 3: Hàm đệ quy gửi để chống tràn bộ đệm
     const sendChunk = () => {
-      // 🛡️ CHẶN CRASH: Kiểm tra xem ống có bị đối tác ngắt đột ngột trong lúc ngủ đông không
       if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-        console.error('❌ Kênh truyền đã đóng hoặc rớt kết nối. Dừng gửi file!');
+        console.error('❌ Kênh truyền đã đóng, dừng gửi file!');
         return;
       }
 
       while (offset < buffer.byteLength) {
-        // CẢNH BÁO ÁP SUẤT: Nếu ống nước bị nghẽn > 1MB, dừng lại chờ 50ms
         if (this.dataChannel.bufferedAmount > 1024 * 1024) {
           setTimeout(sendChunk, 50);
           return;
@@ -128,14 +125,22 @@ class WebRTCService {
 
         const slice = buffer.slice(offset, offset + chunkSize);
         
-        // 🛡️ CHẶN CRASH: Bắt lỗi nếu send thất bại ở mức vật lý
+        // 🔥 CHÌA KHÓA 2: Đổi Nhị phân sang Chuỗi Base64 để vượt rào JS Bridge
+        const uint8Array = new Uint8Array(slice);
+        let binaryString = '';
+        for (let i = 0; i < uint8Array.byteLength; i++) {
+            binaryString += String.fromCharCode(uint8Array[i]);
+        }
+        const base64Chunk = btoa(binaryString);
+
         try {
-          this.dataChannel.send(slice);
+          // Gửi đi dưới dạng TEXT (Chuỗi). Phía Mobile parse JSON xịt sẽ ném vào hàng đợi!
+          this.dataChannel.send(base64Chunk);
         } catch (error) {
           console.error('❌ Lỗi văng khi nhồi data vào ống:', error);
-          return; // Ngắt vòng lặp ngay lập tức
+          return;
         }
-        
+
         offset += slice.byteLength;
 
         const progress = Math.round((offset / buffer.byteLength) * 100);
@@ -145,6 +150,8 @@ class WebRTCService {
       }
       console.log('✅ Đã đẩy toàn bộ file lên đường ống thành công!');
     };
+
+    sendChunk();
   }
 
   // --- HÀM GHÉP MẢNH VÀ DOWNLOAD ---
