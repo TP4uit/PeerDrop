@@ -172,24 +172,51 @@ class WebRTCService {
         }
 
         // KHI NHẬN ĐỦ 100%
+        // KHI NHẬN ĐỦ 100%
         if (this.receivedSize >= this.incomingFileInfo.size) {
           console.log('🎉 [Mobile] LẮP RÁP FILE THÀNH CÔNG 100%!');
           
+          const localUri = `file://${this.pendingFileUri}`;
+          const safeFileName = this.incomingFileInfo.name.replace(/\s+/g, '_');
+
           try {
-            const localUri = `file://${this.pendingFileUri}`;
+            // 1. Thử lưu vào Thư viện Ảnh/Video (Sẽ thất bại nếu là tài liệu như .docx, .pdf)
             const asset = await MediaLibrary.createAssetAsync(localUri);
             await MediaLibrary.createAlbumAsync('PeerDrop', asset, false);
-            console.log('✅ File đã nằm an toàn trong Bộ sưu tập của máy!');
+            console.log('✅ File media đã nằm an toàn trong Bộ sưu tập!');
+            
+            // Thông báo UI ngay lập tức
+            alert(`🎉 Đã nhận thành công ảnh/video: ${safeFileName}`);
           } catch(e) {
-            console.log('⚠️ File đã được lưu, đường dẫn:', this.pendingFileUri);
+            // 2. CHUYỂN HƯỚNG: Nếu là Tài liệu, Lưu vào thư mục Download của hệ điều hành
+            try {
+              const Platform = require('react-native').Platform;
+              
+              if (Platform.OS === 'android') {
+                // Trên Android: Copy ra thư mục Download
+                const downloadPath = `${RNFS.DownloadDirectoryPath}/${safeFileName}`;
+                await RNFS.copyFile(this.pendingFileUri!, downloadPath);
+                
+                console.log(`✅ Đã xuất tài liệu ra: ${downloadPath}`);
+                alert(`🎉 Đã nhận thành công file!\nTài liệu đã được lưu vào thư mục Download của máy.`);
+              } else {
+                // Trên iOS: Lưu vào DocumentDirectory (Sẽ hiển thị trong ứng dụng Tệp / Files)
+                const docPath = `${RNFS.DocumentDirectoryPath}/${safeFileName}`;
+                await RNFS.copyFile(this.pendingFileUri!, docPath);
+                alert(`🎉 Đã nhận thành công file!\nKiểm tra ứng dụng Tệp (Files) trên iPhone nhé.`);
+              }
+            } catch (copyErr) {
+              console.error('Lỗi khi copy file ra ngoài:', copyErr);
+              alert('Nhận file thành công nhưng không thể tự động copy ra Download. Vui lòng cấp quyền bộ nhớ!');
+            }
           }
 
           if (this.onComplete) this.onComplete();
           
-          // Đóng sập các biến lại để kết thúc phiên truyền tải
+          // Đóng sập các biến lại để kết thúc phiên truyền tải và chuẩn bị cho file tiếp theo
           this.incomingFileInfo = null;
           this.pendingFileUri = null; 
-          break; // Thoát vòng lặp
+          break; // Thoát vòng lặp hiện tại
         }
       } catch (err) {
         console.error('❌ Lỗi khi ghi đĩa IO:', err);
