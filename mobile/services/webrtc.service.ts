@@ -238,8 +238,66 @@ class WebRTCService {
   }
 
   async sendFile(file: any) {
-    console.log('[Native] Bắt đầu truyền file:', file?.name);
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+      alert('Chưa kết nối đến máy nào!');
+      return;
+    }
+
+    console.log('[Mobile] Bắt đầu truyền file:', file.name);
     this.pendingFile = file;
+
+    // 1. Gửi vé Metadata báo trước cho máy nhận
+    const metadata = { 
+      name: file.name, 
+      size: file.size, 
+      fileType: file.mimeType || 'application/octet-stream' 
+    };
+    this.dataChannel.send(JSON.stringify({ type: 'file-meta', metadata }));
+
+    // 2. Chuẩn bị băm file (Ngưỡng an toàn 16KB)
+    const chunkSize = 16 * 1024;
+    let offset = 0;
+    const filePath = file.uri;
+
+    // 3. Hàm đệ quy bơm nước vào ống mạng (Kiểm soát Backpressure)
+    const sendChunk = async () => {
+      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+        console.error('❌ Kênh truyền đã đóng!');
+        return;
+      }
+
+      while (offset < file.size) {
+        // Kiểm soát áp suất: Nếu ống nghẽn, ngủ 50ms chờ xả bớt
+        if (this.dataChannel.bufferedAmount > 1024 * 1024) {
+          setTimeout(sendChunk, 50);
+          return;
+        }
+
+        try {
+          // Đọc một mảnh 16KB từ ổ cứng dưới dạng Base64
+          const base64Chunk = await RNFS.read(filePath, chunkSize, offset, 'base64');
+          
+          // Ném thẳng mảnh dữ liệu vào ống
+          this.dataChannel.send(base64Chunk);
+          
+          // Cộng dồn vị trí (Dùng hàm min để tránh lố byte ở mảnh cuối cùng)
+          const actualReadSize = Math.min(chunkSize, file.size - offset);
+          offset += actualReadSize;
+
+          // Báo cáo UI
+          const progress = Math.round((offset / file.size) * 100);
+          if (progress % 10 === 0 || progress === 100) {
+            console.log(`📤 [Mobile] Đang đẩy lên mạng... ${progress}%`);
+          }
+        } catch (error) {
+          console.error('❌ Lỗi khi đọc file từ ổ cứng:', error);
+          return;
+        }
+      }
+      console.log('✅ [Mobile] Đã đẩy toàn bộ file lên đường ống thành công!');
+    };
+
+    sendChunk(); // Kích hoạt luồng chạy
   }
 
   initSignalListener() {

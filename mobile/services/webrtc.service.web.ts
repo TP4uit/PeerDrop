@@ -16,7 +16,7 @@ class WebRTCService {
 
   public onProgress: ((percent: number) => void) | null = null;
   public onComplete: (() => void) | null = null;
-  private lastReportedProgress = -1; // Dùng để tránh UI bị giật lag do render quá nhiều
+  private lastReportedProgress = -1;
 
   // --- BIẾN TRẠNG THÁI NHẬN FILE ---
   private receiveBuffer: ArrayBuffer[] = [];
@@ -42,10 +42,33 @@ class WebRTCService {
     };
   }
 
+  // --- HELPER: TÍNH TOÁN % VÀ LƯU FILE KHI XONG ---
+  private updateProgressAndSave() {
+    if (!this.incomingFileInfo) return;
+
+    const progress = Math.round((this.receivedSize / this.incomingFileInfo.size) * 100);
+    if (progress !== this.lastReportedProgress) {
+      if (this.onProgress) this.onProgress(progress);
+      this.lastReportedProgress = progress;
+    }
+
+    // Khi nhận đủ 100% dung lượng file
+    if (this.receivedSize >= this.incomingFileInfo.size) {
+      console.log('✅ Đã nhận xong toàn bộ mảnh ghép từ Mobile!');
+      this.saveReceivedFile();
+      if (this.onComplete) this.onComplete();
+      
+      // Reset biến để nhận file tiếp theo
+      this.incomingFileInfo = null;
+      this.receiveBuffer = [];
+      this.receivedSize = 0;
+    }
+  }
+
+  // --- BỘ LẮNG NGHE DATA TỪ MOBILE GỬI LÊN ---
   setupDataChannelListeners() {
     if (!this.dataChannel) return;
     
-    // Cực kỳ quan trọng: Báo cho DataChannel biết dữ liệu nhị phân sẽ là ArrayBuffer
     this.dataChannel.binaryType = 'arraybuffer';
 
     this.dataChannel.onopen = () => {
@@ -53,46 +76,49 @@ class WebRTCService {
     };
 
     this.dataChannel.onmessage = (event) => {
-      // 1. NHẬN METADATA (Tên, size file) dưới dạng Text JSON
+      // 1. NHẬN DỮ LIỆU DẠNG TEXT (Chuỗi JSON Metadata hoặc Base64 Chunk từ Mobile)
       if (typeof event.data === 'string') {
         try {
           const msg = JSON.parse(event.data);
+          
+          // Đón gói tin báo hiệu File-meta
           if (msg.type === 'file-meta') {
             this.incomingFileInfo = msg.metadata;
-            this.receiveBuffer = []; // Làm sạch thùng chứa
+            this.receiveBuffer = []; 
             this.receivedSize = 0;
+            this.lastReportedProgress = -1;
             console.log(`📥 Bắt đầu nhận file: ${msg.metadata.name} (${(msg.metadata.size / 1024 / 1024).toFixed(2)} MB)`);
           }
         } catch (e) {
-          console.log('📩 Tin nhắn Text:', event.data);
+          // 🚨 NẾU PARSE JSON LỖI -> ĐÂY CHÍNH LÀ MẢNH FILE BASE64 TỪ MOBILE GỬI QUA!
+          if (!this.incomingFileInfo) return;
+
+          // Giải mã Base64 thành ArrayBuffer cho trình duyệt
+          const binaryString = window.atob(event.data);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+
+          // Nhét vào vùng đệm RAM của Web
+          this.receiveBuffer.push(bytes.buffer);
+          this.receivedSize += bytes.byteLength;
+          this.updateProgressAndSave();
         }
       } 
-      // 2. NHẬN CÁC MẢNH FILE (Chunk) dưới dạng Nhị phân
+      // 2. NHẬN DỮ LIỆU DẠNG NHỊ PHÂN (Dự phòng nếu DataChannel tự gửi ArrayBuffer)
       else if (event.data instanceof ArrayBuffer) {
         if (!this.incomingFileInfo) return; 
 
-        // Gom các mảnh ghép vào mảng
         this.receiveBuffer.push(event.data);
         this.receivedSize += event.data.byteLength;
-
-        // Cập nhật giao diện (Chỉ báo cáo khi % có sự thay đổi để tránh lag UI)
-        const progress = Math.round((this.receivedSize / this.incomingFileInfo.size) * 100);
-        if (progress !== this.lastReportedProgress) {
-          if (this.onProgress) this.onProgress(progress);
-          this.lastReportedProgress = progress;
-        }
-
-        // 3. KHI NHẬN ĐỦ 100% -> GHÉP FILE VÀ LƯU XUỐNG
-        if (this.receivedSize === this.incomingFileInfo.size) {
-          console.log('✅ Đã nhận xong toàn bộ mảnh ghép!');
-          this.saveReceivedFile();
-          if (this.onComplete) this.onComplete(); // <--- Báo cho UI biết đã xong
-        }
+        this.updateProgressAndSave();
       }
     };
   }
 
-  // --- THUẬT TOÁN BĂM NHỎ VÀ GỬI FILE (BẢN VƯỢT RÀO REACT NATIVE) ---
+  // --- MÁY GỬI: BĂM NHỎ FILE VÀ GỬI CHO MOBILE ---
   async sendFile(file: File) {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
       alert('Chưa kết nối đến máy nào! Vui lòng chọn máy trên Radar trước.');
@@ -105,27 +131,29 @@ class WebRTCService {
     const metadata = { name: file.name, size: file.size, fileType: file.type };
     this.dataChannel.send(JSON.stringify({ type: 'file-meta', metadata }));
 
-    // 🔥 CHÌA KHÓA 1: Giảm chunkSize xuống 16KB (Ngưỡng an toàn tuyệt đối của SCTP WebRTC)
+    // Bước 2: Băm nhỏ file thành từng mảnh 16KB (Ngưỡng an toàn tuyệt đối)
     const chunkSize = 16 * 1024; 
     const buffer = await file.arrayBuffer();
     let offset = 0;
 
-    // Bước 3: Hàm đệ quy gửi để chống tràn bộ đệm
+    // Bước 3: Hàm đệ quy gửi để chống tràn bộ đệm (Backpressure)
     const sendChunk = () => {
       if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-        console.error('❌ Kênh truyền đã đóng, dừng gửi file!');
+        console.error('❌ Kênh truyền đã đóng hoặc rớt kết nối. Dừng gửi file!');
         return;
       }
 
       while (offset < buffer.byteLength) {
+        // CẢNH BÁO ÁP SUẤT: Nếu ống nước bị nghẽn > 1MB, dừng lại chờ 50ms
         if (this.dataChannel.bufferedAmount > 1024 * 1024) {
           setTimeout(sendChunk, 50);
           return;
         }
 
+        // Cắt khúc 16KB
         const slice = buffer.slice(offset, offset + chunkSize);
         
-        // 🔥 CHÌA KHÓA 2: Đổi Nhị phân sang Chuỗi Base64 để vượt rào JS Bridge
+        // Đổi Nhị phân sang Chuỗi Base64 để vượt qua cầu nối JS Bridge của React Native
         const uint8Array = new Uint8Array(slice);
         let binaryString = '';
         for (let i = 0; i < uint8Array.byteLength; i++) {
@@ -134,13 +162,13 @@ class WebRTCService {
         const base64Chunk = btoa(binaryString);
 
         try {
-          // Gửi đi dưới dạng TEXT (Chuỗi). Phía Mobile parse JSON xịt sẽ ném vào hàng đợi!
+          // Gửi đoạn Base64 qua ống DataChannel
           this.dataChannel.send(base64Chunk);
         } catch (error) {
           console.error('❌ Lỗi văng khi nhồi data vào ống:', error);
-          return;
+          return; 
         }
-
+        
         offset += slice.byteLength;
 
         const progress = Math.round((offset / buffer.byteLength) * 100);
@@ -154,7 +182,7 @@ class WebRTCService {
     sendChunk();
   }
 
-  // --- HÀM GHÉP MẢNH VÀ DOWNLOAD ---
+  // --- HÀM GHÉP MẢNH VÀ DOWNLOAD TRÊN TRÌNH DUYỆT ---
   saveReceivedFile() {
     // Ép toàn bộ các mảng Byte lại thành 1 cục Blob nguyên bản
     const blob = new Blob(this.receiveBuffer, { type: this.incomingFileInfo.fileType });
@@ -172,7 +200,7 @@ class WebRTCService {
     console.log(`🎉 TẢI XUỐNG THÀNH CÔNG: ${this.incomingFileInfo.name}`);
   }
 
-  // --- 2 Hàm Khởi Tạo Nguyên Bản Dưới Đây Giữ Nguyên ---
+  // --- KHỞI TẠO CUỘC GỌI WEBRTC ---
   async startCall(targetId: string) {
     this.init(targetId);
     if (!this.peerConnection) return;
