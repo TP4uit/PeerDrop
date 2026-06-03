@@ -11,6 +11,7 @@ import {
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import { webRTCService } from '../services/webrtc.service';
 
 interface FileItem {
   id: string;
@@ -20,6 +21,7 @@ interface FileItem {
   type: 'image' | 'video' | 'document' | 'audio';
   color: string;
   selected: boolean;
+  rawFile?: any;
 }
 
 const fileTabs = ['All', 'Photos', 'Videos', 'Documents', 'Music'] as const;
@@ -86,6 +88,7 @@ const normalizeDocuments = (result: any): FileItem[] => {
         type,
         color: typeColor[type],
         selected: true,
+        rawFile: doc.file,
       };
     });
 };
@@ -160,6 +163,18 @@ export default function FileSelectionScreen() {
 
   const handleProceed = () => {
     if (selectedCount > 0) {
+      
+      // Lấy data file gốc của file đầu tiên được chọn
+      const firstSelectedFile = files.find((f) => f.selected)?.rawFile;
+
+      if (firstSelectedFile) {
+        // 🚀 BẮN DỮ LIỆU QUA ĐƯỜNG ỐNG P2P
+        webRTCService.sendFile(firstSelectedFile);
+      } else {
+        console.warn('Lỗi: Không tìm thấy object file để gửi!');
+      }
+
+      // Chuyển sang màn hình Transfer như cũ
       router.push({
         pathname: '/transfer',
         params: {

@@ -12,6 +12,10 @@ class WebRTCService {
   public dataChannel: RTCDataChannel | null = null;
   public targetSocketId: string | null = null;
 
+  public onProgress: ((percent: number) => void) | null = null;
+  public onComplete: (() => void) | null = null;
+  private lastReportedProgress = -1; // Dùng để tránh UI bị giật lag do render quá nhiều
+
   // --- BIẾN TRẠNG THÁI NHẬN FILE ---
   private receiveBuffer: ArrayBuffer[] = [];
   private incomingFileInfo: any = null;
@@ -69,16 +73,18 @@ class WebRTCService {
         this.receiveBuffer.push(event.data);
         this.receivedSize += event.data.byteLength;
 
-        // Tính % hiển thị log (chỉ log mỗi 10% để tránh lag máy)
+        // Cập nhật giao diện (Chỉ báo cáo khi % có sự thay đổi để tránh lag UI)
         const progress = Math.round((this.receivedSize / this.incomingFileInfo.size) * 100);
-        if (progress % 10 === 0 || progress === 100) {
-          console.log(`⏳ Đang tải... ${progress}%`);
+        if (progress !== this.lastReportedProgress) {
+          if (this.onProgress) this.onProgress(progress);
+          this.lastReportedProgress = progress;
         }
 
         // 3. KHI NHẬN ĐỦ 100% -> GHÉP FILE VÀ LƯU XUỐNG
         if (this.receivedSize === this.incomingFileInfo.size) {
           console.log('✅ Đã nhận xong toàn bộ mảnh ghép!');
           this.saveReceivedFile();
+          if (this.onComplete) this.onComplete(); // <--- Báo cho UI biết đã xong
         }
       }
     };

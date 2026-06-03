@@ -21,6 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import CircularProgress from '@/components/ui/CircularProgress';
 import { addTransferHistoryItem } from '@/utils/transferHistory';
+import { webRTCService } from '../services/webrtc.service';
 
 interface TransferStats {
   speed: string; // MB/s
@@ -68,22 +69,24 @@ export default function TransferScreen() {
 
   // Simulate transfer progress (pausable)
   useEffect(() => {
-    if (progress >= 100) {
-      setIsTransferring(false);
-      return;
+    // 1. Nếu đang chuyển file, đăng ký hàm lắng nghe %
+    if (isTransferring && !isPaused) {
+      webRTCService.onProgress = (percent) => {
+        setProgress(percent);
+      };
+
+      webRTCService.onComplete = () => {
+        setProgress(100);
+        setIsTransferring(false);
+      };
     }
 
-    if (!isTransferring || isPaused) return;
-
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        const nextProgress = prev + Math.random() * 12 + 4;
-        return nextProgress >= 100 ? 100 : nextProgress;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [progress, isTransferring, isPaused]);
+    // 2. Dọn dẹp kết nối UI khi huỷ
+    return () => {
+      webRTCService.onProgress = null;
+      webRTCService.onComplete = null;
+    };
+  }, [isTransferring, isPaused]);
 
   // Update stats based on progress
   useEffect(() => {
