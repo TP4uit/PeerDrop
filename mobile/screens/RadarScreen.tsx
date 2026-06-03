@@ -149,6 +149,26 @@ export default function RadarScreen() {
       <View style={styles.body}>
         <Text style={styles.searchLabel}>Looking for nearby devices</Text>
 
+        {/* NÚT HACK DÀNH RIÊNG CHO CHẶNG 4 (Sẽ xóa đi ở Chặng 5) */}
+        <TouchableOpacity 
+          style={{ padding: 12, backgroundColor: 'rgba(0,225,155,0.2)', borderRadius: 8, marginBottom: 20, zIndex: 100 }}
+          onPress={() => {
+            // Mở hộp thoại chọn file của Windows/Mac
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.onchange = (e: any) => {
+              const file = e.target.files[0];
+              if (file) {
+                // Gọi tới hàm băm file của chúng ta
+                webRTCService.sendFile(file);
+              }
+            };
+            input.click();
+          }}
+        >
+          <Text style={{ color: '#00E19B', fontWeight: 'bold' }}>📡 CHỌN FILE GỬI THỬ</Text>
+        </TouchableOpacity>
+
         <View
           style={[
             styles.radarContainer,
