@@ -100,20 +100,31 @@ class WebRTCService {
           }
 
           if (parsedData.type === 'file-meta') {
+            const safeFileName = parsedData.metadata.name.replace(/\s+/g, '_');
+            const uri = `${RNFS.CachesDirectoryPath}/${safeFileName}`;
+            
+            // 🛑 FIX LỖI TỐC ĐỘ: Đợi hệ điều hành tạo file rỗng xong xuôi...
+            await RNFS.writeFile(uri, '', 'utf8');
+            
+            // ...Rồi MỚI gán biến để mở khóa cho Hàng đợi ghi (Queue)
+            this.pendingFileUri = uri;
             this.incomingFileInfo = parsedData.metadata;
             this.receivedSize = 0;
             this.lastReportedProgress = -1;
             
-            // 🔥 TẠO FILE RỖNG BẰNG RNFS
-            const safeFileName = this.incomingFileInfo.name.replace(/\s+/g, '_');
-            this.pendingFileUri = `${RNFS.CachesDirectoryPath}/${safeFileName}`;
-            await RNFS.writeFile(this.pendingFileUri, '', 'utf8');
-            
             console.log(`📥 [Mobile] Ổ cứng đã mở, sẵn sàng nhận: ${this.incomingFileInfo.name}`);
+            
+            // Kích hoạt lại hàng đợi phòng khi có chunk tới sớm bị kẹt
+            this.processWriteQueue();
             return;
           }
-        } catch (e) {}
+        } catch (e) {
+          // 🔥 FIX HỐ ĐEN: Nếu parse JSON thất bại, đây CHÍNH LÀ MẢNH DỮ LIỆU FILE!
+          this.chunkQueue.push(event.data);
+          this.processWriteQueue();
+        }
       } else {
+        // Dành cho trường hợp RN WebRTC phiên bản mới trả về ArrayBuffer chuẩn
         this.chunkQueue.push(event.data);
         this.processWriteQueue();
       }
@@ -121,30 +132,33 @@ class WebRTCService {
   }
 
   private async processWriteQueue() {
-    if (this.isWriting || this.chunkQueue.length === 0) return;
+    // 🛑 CHẶN LẠI: Nếu file chưa tạo xong (pendingFileUri đang null) thì khoá van không cho ghi!
+    if (this.isWriting || this.chunkQueue.length === 0 || !this.pendingFileUri || !this.incomingFileInfo) {
+        return;
+    }
+    
     this.isWriting = true;
 
     while (this.chunkQueue.length > 0) {
       const data = this.chunkQueue.shift();
-      if (!this.pendingFileUri || !this.incomingFileInfo) continue;
 
       try {
         let base64Chunk = '';
         let chunkSize = 0;
         
-        if (typeof data !== 'string') {
+        if (typeof data === 'string') {
+           base64Chunk = data;
+           // Tính lại số byte chuẩn từ chuỗi Base64
+           const padding = (data.endsWith("==") ? 2 : (data.endsWith("=") ? 1 : 0));
+           chunkSize = Math.floor((data.length * 3) / 4) - padding;
+        } else {
            const bytes = new Uint8Array(data);
            chunkSize = bytes.byteLength;
            base64Chunk = bytesToBase64(bytes);
-        } else {
-           base64Chunk = data;
-           chunkSize = Math.round((base64Chunk.length * 3) / 4);
         }
 
-        // 🔥 GHI NỐI TIẾP VỚI LỆNH APPENDFILE CỦA NATIVE (Không tràn RAM!)
-        // Dấu ! ở biến pendingFileUri dùng để cam đoan với TS rằng nó không bị null
+        // Bơm thẳng nước xuống ổ cứng
         await RNFS.appendFile(this.pendingFileUri!, base64Chunk, 'base64');
-
         this.receivedSize += chunkSize;
 
         const progress = Math.round((this.receivedSize / this.incomingFileInfo.size) * 100);
@@ -153,16 +167,15 @@ class WebRTCService {
           this.lastReportedProgress = progress;
           
           if (progress % 10 === 0 || progress === 100) {
-             console.log(`📦 [Mobile] Đã lưu xuống đĩa... ${progress}%`);
+             console.log(`📦 [Mobile] Đã lưu... ${progress}% (${this.receivedSize}/${this.incomingFileInfo.size} bytes)`);
           }
         }
 
+        // KHI NHẬN ĐỦ 100%
         if (this.receivedSize >= this.incomingFileInfo.size) {
           console.log('🎉 [Mobile] LẮP RÁP FILE THÀNH CÔNG 100%!');
           
           try {
-            // Đẩy File từ thư mục Cache sang thư viện ảnh/video của ĐT
-            // Dùng "file://" prefix vì expo-media-library yêu cầu định dạng URI chuẩn
             const localUri = `file://${this.pendingFileUri}`;
             const asset = await MediaLibrary.createAssetAsync(localUri);
             await MediaLibrary.createAlbumAsync('PeerDrop', asset, false);
@@ -172,7 +185,11 @@ class WebRTCService {
           }
 
           if (this.onComplete) this.onComplete();
+          
+          // Đóng sập các biến lại để kết thúc phiên truyền tải
           this.incomingFileInfo = null;
+          this.pendingFileUri = null; 
+          break; // Thoát vòng lặp
         }
       } catch (err) {
         console.error('❌ Lỗi khi ghi đĩa IO:', err);
