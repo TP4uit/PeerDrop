@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { socketService } from '../services/socket.service';
 
 interface AppDevice {
   id: string;
@@ -19,29 +20,6 @@ interface AppDevice {
   isOnline: boolean;
 }
 
-const mockDevices: AppDevice[] = [
-  {
-    id: '1',
-    name: 'MacBook Pro',
-    type: 'computer',
-    position: { angle: 20, radius: 0.46 },
-    isOnline: true,
-  },
-  {
-    id: '2',
-    name: "David's Android",
-    type: 'phone',
-    position: { angle: 210, radius: 0.52 },
-    isOnline: true,
-  },
-  {
-    id: '3',
-    name: 'iPad Air',
-    type: 'tablet',
-    position: { angle: 280, radius: 0.40 },
-    isOnline: true,
-  },
-];
 
 const RadarWave = ({
   delay,
@@ -102,9 +80,46 @@ export default function RadarScreen() {
   const bubbleHeight = 78;
   const [isScanning, setIsScanning] = useState(true);
 
+  const [discoveredDevices, setDiscoveredDevices] = useState<AppDevice[]>([]);
+
   useEffect(() => {
-    const timer = setTimeout(() => setIsScanning(false), 1800);
-    return () => clearTimeout(timer);
+    // 1. Hàm lắng nghe kết quả từ server trả về
+    const handleRadarResult = (hosts: any[]) => {
+      // Lọc bỏ chính mình ra khỏi danh sách (không ai tự gửi file cho mình)
+      const otherDevices = hosts.filter(h => h.socketId !== socketService.socket?.id);
+
+      // Chuyển đổi dữ liệu server thành định dạng UI
+      const mappedDevices: AppDevice[] = otherDevices.map((host, index) => {
+        // Thuật toán chia đều góc để các máy không đè lên nhau trên UI
+        const angle = (index * (360 / Math.max(otherDevices.length, 1))) % 360;
+        const radius = 0.35 + Math.random() * 0.15; // Khoảng cách ngẫu nhiên từ tâm
+
+        return {
+          id: host.roomId, // Dùng roomId để lát nữa bấm vào sẽ kết nối đúng máy
+          name: host.nickname,
+          type: 'phone', 
+          position: { angle, radius },
+          isOnline: true,
+        };
+      });
+      
+      setDiscoveredDevices(mappedDevices);
+    };
+
+    // 2. Bật kênh lắng nghe
+    socketService.socket?.on('radar-result', handleRadarResult);
+
+    // 3. Vòng lặp bắn tia radar mỗi 2 giây một lần để dò tìm liên tục
+    socketService.socket?.emit('radar-scan');
+    const scanInterval = setInterval(() => {
+      socketService.socket?.emit('radar-scan');
+    }, 2000);
+
+    // 4. Hủy lắng nghe khi thoát màn hình
+    return () => {
+      clearInterval(scanInterval);
+      socketService.socket?.off('radar-result', handleRadarResult);
+    };
   }, []);
 
   const handleDevicePress = (device: AppDevice) => {
@@ -161,7 +176,7 @@ export default function RadarScreen() {
           </View>
 
           {/* Devices */}
-          {mockDevices.map((device) => {
+          {discoveredDevices.map((device) => {
             const radians = (device.position.angle * Math.PI) / 180;
 
             const dx =

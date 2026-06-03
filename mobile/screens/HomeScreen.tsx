@@ -30,13 +30,15 @@ export default function HomeScreen() {
   
 useEffect(() => {
     const setupConnection = async () => {
-      // Đợi định danh và kết nối mạng
       await socketService.connect();
-      
-      // Gán tên thật vừa lấy được (A16 của Phúc) vào State để UI tự động đổi
       setNickname(socketService.nickname);
-      
-      // (ĐÃ XÓA dòng socketService.joinRoom('1234') ở đây để hết bị báo WARN)
+      socketService.socket?.emit('join-room', {
+        roomId: socketService.deviceId,
+        userInfo: {
+          nickname: socketService.nickname,
+          avatar: socketService.avatar
+        }
+      });
     };
 
     setupConnection();
