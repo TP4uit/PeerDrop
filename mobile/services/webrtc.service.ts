@@ -17,6 +17,7 @@ class WebRTCService {
   public peerConnection: any = null;
   public dataChannel: any = null;
   public targetSocketId: string | null = null;
+  public onConnected: ((remoteDeviceName: string) => void) | null = null;
 
   public pendingFile: any = null;
 
@@ -51,18 +52,58 @@ class WebRTCService {
   }
 
   // 2. Cài đặt các sự kiện cho đường truyền dữ liệu
+
   setupDataChannelListeners() {
+    this.dataChannel.onopen = () => {
+      console.log('🔥 [WebRTC] Data Channel ĐÃ MỞ! Mạng P2P thiết lập thành công!');
+      
+      // Gửi gói tin bắt tay (Handshake) chứa tên thiết bị thật của mình sang máy kia
+      const handshakePayload = {
+        type: 'HANDSHAKE',
+        nickname: socketService.nickname || 'Unknown Device'
+      };
+      this.dataChannel.send(JSON.stringify(handshakePayload));
+    };
+
+    this.dataChannel.onmessage = (event: any) => {
+      console.log('📩 [WebRTC] TIN NHẮN ĐẾN:', event.data);
+      
+      try {
+        // Thử phân tích dữ liệu tin nhắn dạng JSON
+        const parsedData = JSON.parse(event.data);
+        
+        // Nếu là gói tin bắt tay thiết bị
+        if (parsedData.type === 'HANDSHAKE') {
+          console.log(`🤝 [WebRTC] Đã bắt tay thành công với: ${parsedData.nickname}`);
+          
+          // 🌟 KÍCH HOẠT UI: Báo cho màn hình ReceiveScreen biết tên máy gửi thật để bật Pop-up thành công
+          if (this.onConnected) {
+            this.onConnected(parsedData.nickname);
+          }
+          return; // Ngắt dòng để không nhảy vào alert phía dưới
+        }
+      } catch (e) {
+        // Nếu không phải chuỗi JSON (ví dụ tin nhắn text bình thường) thì xử lý bình thường
+      }
+
+      // Giữ nguyên logic nhận tin nhắn cũ của Phúc
+      alert(`Tin nhắn P2P: ${event.data}`); 
+    };
+  }
+  /*setupDataChannelListeners() {
     this.dataChannel.onopen = () => {
       console.log('🔥 [WebRTC] Data Channel ĐÃ MỞ! Mạng P2P thiết lập thành công!');
       // Gửi ngay 1 tin nhắn test đi
       this.dataChannel.send(`Hello từ ${socketService.nickname}!`);
     };
 
+    
+
     this.dataChannel.onmessage = (event: any) => {
       console.log('📩 [WebRTC] TIN NHẮN ĐẾN:', event.data);
       alert(`Tin nhắn P2P: ${event.data}`); // Hiển thị pop-up lên màn hình
     };
-  }
+  } */
 
   // 3. MÁY GỬI: Bắt đầu cuộc gọi (Tạo Offer)
   async startCall(targetId: string) {

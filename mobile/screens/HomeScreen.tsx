@@ -33,13 +33,13 @@ useEffect(() => {
     const setupConnection = async () => {
       await socketService.connect();
       setNickname(socketService.nickname);
-      socketService.socket?.emit('join-room', {
+      /* socketService.socket?.emit('join-room', {
         roomId: socketService.deviceId,
         userInfo: {
           nickname: socketService.nickname,
           avatar: socketService.avatar
         }
-      });
+      }); */
 
       webRTCService.initSignalListener(); // Bắt đầu lắng nghe tín hiệu WebRTC ngay khi kết nối socket thành công
     };
@@ -47,7 +47,7 @@ useEffect(() => {
     setupConnection();
 
     return () => {
-      socketService.disconnect();
+      /*socketService.disconnect(); */
     };
   }, []);
 

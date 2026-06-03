@@ -97,6 +97,13 @@ class SocketService {
     });
   }
 
+  leaveRoom() {
+    if (this.socket?.connected) {
+      this.socket.emit('leave-room');
+      console.log('📤 [Socket] Đã rời phòng phát sóng');
+    }
+  }
+
   disconnect() {
     if (this.socket) {
       this.socket.disconnect();

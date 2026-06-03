@@ -93,12 +93,22 @@ export default function RadarScreen() {
       const mappedDevices: AppDevice[] = otherDevices.map((host, index) => {
         // Thuật toán chia đều góc để các máy không đè lên nhau trên UI
         const angle = (index * (360 / Math.max(otherDevices.length, 1))) % 360;
-        const radius = 0.35 + Math.random() * 0.15; // Khoảng cách ngẫu nhiên từ tâm
+        const radius = index % 2 === 0 ? 0.36 : 0.48;
+        /*const radius = 0.35 + Math.random() * 0.15; */ // Khoảng cách ngẫu nhiên từ tâm
+
+        // 📍 ĐÃ SỬA: Phân tích nhanh tên máy để gán icon hiển thị tương ứng thật hơn
+        const lowerName = (host.nickname || '').toLowerCase();
+        let deviceType: 'phone' | 'tablet' | 'computer' = 'phone';
+        if (lowerName.includes('ipad') || lowerName.includes('tablet')) {
+          deviceType = 'tablet';
+        } else if (lowerName.includes('mac') || lowerName.includes('pc') || lowerName.includes('laptop') || lowerName.includes('computer')) {
+          deviceType = 'computer';
+        }
 
         return {
           id: host.roomId, // Dùng roomId để lát nữa bấm vào sẽ kết nối đúng máy
-          name: host.nickname,
-          type: 'phone', 
+          name: host.nickname || 'Unknown Device',
+          type: deviceType, 
           position: { angle, radius },
           isOnline: true,
         };

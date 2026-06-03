@@ -10,6 +10,9 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { socketService } from '@/services/socket.service';
+import { webRTCService } from '@/services/webrtc.service';
+
 const RadarWave = ({ delay }: { delay: number }) => {
   const anim = useRef(new Animated.Value(0)).current;
 
@@ -58,8 +61,40 @@ export default function ReceiveScreen() {
   const { width } = useWindowDimensions();
   const radarSize = Math.min(width - 40, 340);
   const [stage, setStage] = useState<'waiting' | 'success' | 'connected'>('waiting');
+  const [senderName, setSenderName] = useState<string>('');
 
   useEffect(() => {
+    // 📍 VIỆC 2 CỦA PHÚC: Mở cửa phát sóng khi vừa vào màn hình
+    socketService.socket?.emit('join-room', {
+      roomId: socketService.deviceId,
+      userInfo: { nickname: socketService.nickname, avatar: socketService.avatar }
+    });
+
+    // Bật công tắc lắng nghe WebRTC
+    webRTCService.initSignalListener();
+
+    // 📍 VIỆC 4 CỦA PHÚC: Đăng ký hàm callback lắng nghe đường ống P2P thông xe
+    // Khi kết nối thành công, Phúc sẽ gọi hàm callback này từ Service ngầm
+    webRTCService.onConnected = (remoteDeviceName: string) => {
+      setSenderName(remoteDeviceName); // Cập nhật tên máy gửi thật
+      
+      // Bật Pop-up thành công (stage = 'success')
+      setStage('success');
+
+      // Tự động tắt Pop-up sau 2 giây và chuyển sang trạng thái chờ nhận file
+      setTimeout(() => {
+        setStage('connected');
+      }, 2000);
+    };
+
+    return () => {
+      // Rời khỏi phòng và tắt lắng nghe khi user thoát khỏi màn hình Receive
+      socketService.socket?.emit('leave-room');
+      if (webRTCService.onConnected) webRTCService.onConnected = null; // Clean up listener
+    };
+  }, []);
+
+  /*useEffect(() => {
     const successTimer = setTimeout(() => setStage('success'), 2200);
     const connectedTimer = setTimeout(() => setStage('connected'), 3600);
 
@@ -67,7 +102,7 @@ export default function ReceiveScreen() {
       clearTimeout(successTimer);
       clearTimeout(connectedTimer);
     };
-  }, []);
+  }, []); */
 
   const isWaiting = stage === 'waiting';
   const isConnected = stage === 'connected';
@@ -85,7 +120,7 @@ export default function ReceiveScreen() {
       <View style={styles.body}>
         <Text style={styles.mainTitle}>Ready to Receive</Text>
         <Text style={styles.subtitle}>
-          Your device is currently visible to nearby users as Alex's iPhone
+          Your device is currently visible to nearby users as {socketService.nickname || "Unknown Device"}
         </Text>
 
         <View
@@ -131,7 +166,7 @@ export default function ReceiveScreen() {
             <View style={styles.connectedAvatar}>
               <MaterialCommunityIcons name="android" size={32} color="#05091B" />
             </View>
-            <Text style={styles.connectedName}>David's Android</Text>
+            <Text style={styles.connectedName}>{senderName}</Text>
             <Text style={styles.connectedStatus}>Secure Connection Established</Text>
             <Text style={styles.connectedHint}>Waiting for files...</Text>
           </View>
@@ -139,7 +174,7 @@ export default function ReceiveScreen() {
           <View style={styles.statusBlock}>
             <Text style={styles.statusTitle}>Connection Successful</Text>
             <Text style={styles.statusSubtitle}>
-              You are securely connected to David's Android.
+              You are securely connected to {senderName}.
             </Text>
           </View>
         )}
