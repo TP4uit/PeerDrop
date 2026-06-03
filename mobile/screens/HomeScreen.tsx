@@ -12,6 +12,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { loadTransferHistory } from '@/utils/transferHistory';
 import { socketService } from '../services/socket.service';
+import { webRTCService } from '../services/webrtc.service';
 
 interface RecentTransfer {
   id: string;
@@ -39,6 +40,8 @@ useEffect(() => {
           avatar: socketService.avatar
         }
       });
+
+      webRTCService.initSignalListener(); // Bắt đầu lắng nghe tín hiệu WebRTC ngay khi kết nối socket thành công
     };
 
     setupConnection();

@@ -1,11 +1,6 @@
-import {
-  RTCPeerConnection,
-  RTCIceCandidate,
-  RTCSessionDescription,
-} from 'react-native-webrtc';
 import { socketService } from './socket.service';
 
-// Sử dụng máy chủ STUN miễn phí của Google để dò tìm IP Public của 2 máy
+// Sử dụng STUN Server của Google
 const configuration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -14,17 +9,16 @@ const configuration = {
 };
 
 class WebRTCService {
-  public peerConnection: any = null;
-  public dataChannel: any = null;
+  public peerConnection: RTCPeerConnection | null = null;
+  public dataChannel: RTCDataChannel | null = null;
   public targetSocketId: string | null = null;
 
-  // 1. Khởi tạo kết nối cơ bản
   init(targetId: string) {
     this.targetSocketId = targetId;
+    // Dùng trực tiếp API của trình duyệt Web
     this.peerConnection = new RTCPeerConnection(configuration);
 
-    // Bắt sự kiện ICE Candidate và gửi cho máy kia qua Socket.io
-    this.peerConnection.onicecandidate = (event: any) => {
+    this.peerConnection.onicecandidate = (event) => {
       if (event.candidate && socketService.socket) {
         socketService.socket.emit('webrtc-signal', {
           toId: this.targetSocketId,
@@ -33,64 +27,57 @@ class WebRTCService {
       }
     };
 
-    // Lắng nghe khi máy GỬI mở ống DataChannel tới (Dành cho máy NHẬN)
-    this.peerConnection.ondatachannel = (event: any) => {
+    this.peerConnection.ondatachannel = (event) => {
       this.dataChannel = event.channel;
       this.setupDataChannelListeners();
     };
   }
 
-  // 2. Cài đặt các sự kiện cho đường truyền dữ liệu
   setupDataChannelListeners() {
+    if (!this.dataChannel) return;
     this.dataChannel.onopen = () => {
-      console.log('🔥 [WebRTC] Data Channel ĐÃ MỞ! Mạng P2P thiết lập thành công!');
-      // Gửi ngay 1 tin nhắn test đi
-      this.dataChannel.send(`Hello từ ${socketService.nickname}!`);
+      console.log('🔥 [WebRTC-Web] Data Channel ĐÃ MỞ! Mạng P2P thiết lập thành công!');
+      this.dataChannel?.send(`Hello từ ${socketService.nickname} (Web)!`);
     };
 
-    this.dataChannel.onmessage = (event: any) => {
-      console.log('📩 [WebRTC] TIN NHẮN ĐẾN:', event.data);
-      alert(`Tin nhắn P2P: ${event.data}`); // Hiển thị pop-up lên màn hình
+    this.dataChannel.onmessage = (event) => {
+      console.log('📩 [WebRTC-Web] TIN NHẮN ĐẾN:', event.data);
+      alert(`🎉 Tin nhắn P2P: ${event.data}`);
     };
   }
 
-  // 3. MÁY GỬI: Bắt đầu cuộc gọi (Tạo Offer)
   async startCall(targetId: string) {
     this.init(targetId);
 
-    // Khởi tạo DataChannel với tên 'PeerDropChannel'
+    if (!this.peerConnection) return;
+
     this.dataChannel = this.peerConnection.createDataChannel('PeerDropChannel');
     this.setupDataChannelListeners();
 
-    // Tạo vé mời (Offer) và lưu lại
     const offer = await this.peerConnection.createOffer();
     await this.peerConnection.setLocalDescription(offer);
 
-    // Gửi Offer cho đối tác qua Server
     socketService.socket?.emit('webrtc-signal', {
       toId: targetId,
       signalData: { type: 'offer', offer },
     });
-    console.log(`📤 [WebRTC] Đã gửi Offer tới ${targetId}`);
+    console.log(`📤 [WebRTC-Web] Đã gửi Offer tới ${targetId}`);
   }
 
-  // 4. LẮNG NGHE VÀ XỬ LÝ TÍN HIỆU TỪ SOCKET
   initSignalListener() {
     if (!socketService.socket) return;
     
-    // Đảm bảo không bị lặp sự kiện
     socketService.socket.off('webrtc-signal');
     
     socketService.socket.on('webrtc-signal', async (payload: any) => {
       const { fromId, signalData } = payload;
       
-      // MÁY NHẬN: Khi thấy Offer đến
       if (signalData.type === 'offer') {
-        console.log(`📥 [WebRTC] Nhận được Offer từ ${fromId}`);
+        console.log(`📥 [WebRTC-Web] Nhận được Offer từ ${fromId}`);
         this.init(fromId);
-        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.offer));
+        if (!this.peerConnection) return;
         
-        // Tạo câu trả lời (Answer)
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.offer));
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
         
@@ -99,15 +86,13 @@ class WebRTCService {
           signalData: { type: 'answer', answer },
         });
       } 
-      // MÁY GỬI: Khi thấy Answer phản hồi
       else if (signalData.type === 'answer') {
-        console.log(`📥 [WebRTC] Nhận được Answer từ ${fromId}`);
-        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.answer));
+        console.log(`📥 [WebRTC-Web] Nhận được Answer từ ${fromId}`);
+        await this.peerConnection?.setRemoteDescription(new RTCSessionDescription(signalData.answer));
       } 
-      // CẢ 2 MÁY: Trao đổi IP (ICE)
       else if (signalData.type === 'ice-candidate') {
         try {
-          await this.peerConnection.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+          await this.peerConnection?.addIceCandidate(new RTCIceCandidate(signalData.candidate));
         } catch (e) {
           console.error('Lỗi khi add ICE Candidate', e);
         }

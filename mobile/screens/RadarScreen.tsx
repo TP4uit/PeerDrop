@@ -11,6 +11,7 @@ import {
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { socketService } from '../services/socket.service';
+import { webRTCService } from '../services/webrtc.service';
 
 interface AppDevice {
   id: string;
@@ -124,6 +125,11 @@ export default function RadarScreen() {
 
   const handleDevicePress = (device: AppDevice) => {
     if (!device.isOnline) return;
+    
+    // THÊM DÒNG NÀY: Bắn vé mời WebRTC đến máy vừa bấm
+    webRTCService.startCall(device.id);
+
+    // Vẫn chuyển qua màn hình chọn file (chúng ta sẽ gỡ giao diện chọn file sau)
     router.push({
       pathname: '/file-selection',
       params: { deviceId: device.id, deviceName: device.name },
