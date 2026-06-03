@@ -111,17 +111,31 @@ class WebRTCService {
     let offset = 0;
 
     // Bước 3: Hàm đệ quy gửi để chống tràn bộ đệm (Backpressure)
+    // Bước 3: Hàm đệ quy gửi để chống tràn bộ đệm (Backpressure)
     const sendChunk = () => {
+      // 🛡️ CHẶN CRASH: Kiểm tra xem ống có bị đối tác ngắt đột ngột trong lúc ngủ đông không
+      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+        console.error('❌ Kênh truyền đã đóng hoặc rớt kết nối. Dừng gửi file!');
+        return;
+      }
+
       while (offset < buffer.byteLength) {
-        // CẢNH BÁO ÁP SUẤT: Nếu ống nước bị nghẽn > 1MB, dừng lại chờ 50ms mới gửi tiếp
-        if (this.dataChannel!.bufferedAmount > 1024 * 1024) {
+        // CẢNH BÁO ÁP SUẤT: Nếu ống nước bị nghẽn > 1MB, dừng lại chờ 50ms
+        if (this.dataChannel.bufferedAmount > 1024 * 1024) {
           setTimeout(sendChunk, 50);
           return;
         }
 
-        // Cắt 1 khúc 64KB và ném vào ống DataChannel
         const slice = buffer.slice(offset, offset + chunkSize);
-        this.dataChannel!.send(slice);
+        
+        // 🛡️ CHẶN CRASH: Bắt lỗi nếu send thất bại ở mức vật lý
+        try {
+          this.dataChannel.send(slice);
+        } catch (error) {
+          console.error('❌ Lỗi văng khi nhồi data vào ống:', error);
+          return; // Ngắt vòng lặp ngay lập tức
+        }
+        
         offset += slice.byteLength;
 
         const progress = Math.round((offset / buffer.byteLength) * 100);
@@ -131,8 +145,6 @@ class WebRTCService {
       }
       console.log('✅ Đã đẩy toàn bộ file lên đường ống thành công!');
     };
-
-    sendChunk();
   }
 
   // --- HÀM GHÉP MẢNH VÀ DOWNLOAD ---

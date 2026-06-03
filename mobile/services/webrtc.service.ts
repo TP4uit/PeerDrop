@@ -4,8 +4,9 @@ import {
   RTCSessionDescription,
 } from 'react-native-webrtc';
 import { socketService } from './socket.service';
+import RNFS from 'react-native-fs'; // 🔥 Dùng thư viện Native để có lệnh Append
+import * as MediaLibrary from 'expo-media-library';
 
-// Sử dụng máy chủ STUN miễn phí của Google để dò tìm IP Public của 2 máy
 const configuration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -13,28 +14,53 @@ const configuration = {
   ],
 };
 
+// 🌟 THUẬT TOÁN ĐỘNG CƠ: Chuyển đổi Nhị phân sang Base64
+const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function bytesToBase64(bytes: Uint8Array) {
+  let result = '';
+  let i;
+  const l = bytes.length;
+  for (i = 2; i < l; i += 3) {
+    result += chars[bytes[i - 2] >> 2];
+    result += chars[((bytes[i - 2] & 3) << 4) | (bytes[i - 1] >> 4)];
+    result += chars[((bytes[i - 1] & 15) << 2) | (bytes[i] >> 6)];
+    result += chars[bytes[i] & 63];
+  }
+  if (i === l + 1) {
+    result += chars[bytes[i - 2] >> 2];
+    result += chars[(bytes[i - 2] & 3) << 4];
+    result += '==';
+  } else if (i === l) {
+    result += chars[bytes[i - 2] >> 2];
+    result += chars[((bytes[i - 2] & 3) << 4) | (bytes[i - 1] >> 4)];
+    result += chars[(bytes[i - 1] & 15) << 2];
+    result += '=';
+  }
+  return result;
+}
+
 class WebRTCService {
   public peerConnection: any = null;
   public dataChannel: any = null;
   public targetSocketId: string | null = null;
   public onConnected: ((remoteDeviceName: string) => void) | null = null;
-
   public pendingFile: any = null;
 
   public onProgress: ((percent: number) => void) | null = null;
   public onComplete: (() => void) | null = null;
-  private lastReportedProgress = -1; // Dùng để tránh UI bị giật lag do render quá nhiều
+  private lastReportedProgress = -1;
 
-  private receiveBuffer: any[] = [];
   private incomingFileInfo: any = null;
   private receivedSize = 0;
+  public pendingFileUri: string | null = null;
+  
+  private chunkQueue: any[] = [];
+  private isWriting = false;
 
-  // 1. Khởi tạo kết nối cơ bản
   init(targetId: string) {
     this.targetSocketId = targetId;
     this.peerConnection = new RTCPeerConnection(configuration);
 
-    // Bắt sự kiện ICE Candidate và gửi cho máy kia qua Socket.io
     this.peerConnection.onicecandidate = (event: any) => {
       if (event.candidate && socketService.socket) {
         socketService.socket.emit('webrtc-signal', {
@@ -44,20 +70,17 @@ class WebRTCService {
       }
     };
 
-    // Lắng nghe khi máy GỬI mở ống DataChannel tới (Dành cho máy NHẬN)
     this.peerConnection.ondatachannel = (event: any) => {
       this.dataChannel = event.channel;
       this.setupDataChannelListeners();
     };
   }
 
-  // 2. Cài đặt các sự kiện cho đường truyền dữ liệu
-
   setupDataChannelListeners() {
+    this.dataChannel.binaryType = 'arraybuffer';
+
     this.dataChannel.onopen = () => {
-      console.log('🔥 [WebRTC] Data Channel ĐÃ MỞ! Mạng P2P thiết lập thành công!');
-      
-      // Gửi gói tin bắt tay (Handshake) chứa tên thiết bị thật của mình sang máy kia
+      console.log('🔥 [Mobile] Mạng P2P thiết lập thành công!');
       const handshakePayload = {
         type: 'HANDSHAKE',
         nickname: socketService.nickname || 'Unknown Device'
@@ -65,112 +88,134 @@ class WebRTCService {
       this.dataChannel.send(JSON.stringify(handshakePayload));
     };
 
-    this.dataChannel.onmessage = (event: any) => {
-      console.log('📩 [WebRTC] TIN NHẮN ĐẾN:', event.data);
-      
-      try {
-        // Thử phân tích dữ liệu tin nhắn dạng JSON
-        const parsedData = JSON.parse(event.data);
-        
-        // Nếu là gói tin bắt tay thiết bị
-        if (parsedData.type === 'HANDSHAKE') {
-          console.log(`🤝 [WebRTC] Đã bắt tay thành công với: ${parsedData.nickname}`);
+    this.dataChannel.onmessage = async (event: any) => {
+      if (typeof event.data === 'string') {
+        try {
+          const parsedData = JSON.parse(event.data);
           
-          // 🌟 KÍCH HOẠT UI: Báo cho màn hình ReceiveScreen biết tên máy gửi thật để bật Pop-up thành công
-          if (this.onConnected) {
-            this.onConnected(parsedData.nickname);
+          if (parsedData.type === 'HANDSHAKE') {
+            console.log(`🤝 Đã bắt tay với: ${parsedData.nickname}`);
+            if (this.onConnected) this.onConnected(parsedData.nickname);
+            return; 
           }
-          return; // Ngắt dòng để không nhảy vào alert phía dưới
-        }
-      } catch (e) {
-        // Nếu không phải chuỗi JSON (ví dụ tin nhắn text bình thường) thì xử lý bình thường
-      }
 
-      // Giữ nguyên logic nhận tin nhắn cũ của Phúc
-      alert(`Tin nhắn P2P: ${event.data}`); 
+          if (parsedData.type === 'file-meta') {
+            this.incomingFileInfo = parsedData.metadata;
+            this.receivedSize = 0;
+            this.lastReportedProgress = -1;
+            
+            // 🔥 TẠO FILE RỖNG BẰNG RNFS
+            const safeFileName = this.incomingFileInfo.name.replace(/\s+/g, '_');
+            this.pendingFileUri = `${RNFS.CachesDirectoryPath}/${safeFileName}`;
+            await RNFS.writeFile(this.pendingFileUri, '', 'utf8');
+            
+            console.log(`📥 [Mobile] Ổ cứng đã mở, sẵn sàng nhận: ${this.incomingFileInfo.name}`);
+            return;
+          }
+        } catch (e) {}
+      } else {
+        this.chunkQueue.push(event.data);
+        this.processWriteQueue();
+      }
     };
   }
-  /*setupDataChannelListeners() {
-    this.dataChannel.onopen = () => {
-      console.log('🔥 [WebRTC] Data Channel ĐÃ MỞ! Mạng P2P thiết lập thành công!');
-      // Gửi ngay 1 tin nhắn test đi
-      this.dataChannel.send(`Hello từ ${socketService.nickname}!`);
-    };
 
-    
+  private async processWriteQueue() {
+    if (this.isWriting || this.chunkQueue.length === 0) return;
+    this.isWriting = true;
 
-    this.dataChannel.onmessage = (event: any) => {
-      console.log('📩 [WebRTC] TIN NHẮN ĐẾN:', event.data);
-      alert(`Tin nhắn P2P: ${event.data}`); // Hiển thị pop-up lên màn hình
-    };
-  } */
+    while (this.chunkQueue.length > 0) {
+      const data = this.chunkQueue.shift();
+      if (!this.pendingFileUri || !this.incomingFileInfo) continue;
 
-  // 3. MÁY GỬI: Bắt đầu cuộc gọi (Tạo Offer)
+      try {
+        let base64Chunk = '';
+        let chunkSize = 0;
+        
+        if (typeof data !== 'string') {
+           const bytes = new Uint8Array(data);
+           chunkSize = bytes.byteLength;
+           base64Chunk = bytesToBase64(bytes);
+        } else {
+           base64Chunk = data;
+           chunkSize = Math.round((base64Chunk.length * 3) / 4);
+        }
+
+        // 🔥 GHI NỐI TIẾP VỚI LỆNH APPENDFILE CỦA NATIVE (Không tràn RAM!)
+        // Dấu ! ở biến pendingFileUri dùng để cam đoan với TS rằng nó không bị null
+        await RNFS.appendFile(this.pendingFileUri!, base64Chunk, 'base64');
+
+        this.receivedSize += chunkSize;
+
+        const progress = Math.round((this.receivedSize / this.incomingFileInfo.size) * 100);
+        if (progress !== this.lastReportedProgress) {
+          if (this.onProgress) this.onProgress(progress);
+          this.lastReportedProgress = progress;
+          
+          if (progress % 10 === 0 || progress === 100) {
+             console.log(`📦 [Mobile] Đã lưu xuống đĩa... ${progress}%`);
+          }
+        }
+
+        if (this.receivedSize >= this.incomingFileInfo.size) {
+          console.log('🎉 [Mobile] LẮP RÁP FILE THÀNH CÔNG 100%!');
+          
+          try {
+            // Đẩy File từ thư mục Cache sang thư viện ảnh/video của ĐT
+            // Dùng "file://" prefix vì expo-media-library yêu cầu định dạng URI chuẩn
+            const localUri = `file://${this.pendingFileUri}`;
+            const asset = await MediaLibrary.createAssetAsync(localUri);
+            await MediaLibrary.createAlbumAsync('PeerDrop', asset, false);
+            console.log('✅ File đã nằm an toàn trong Bộ sưu tập của máy!');
+          } catch(e) {
+            console.log('⚠️ File đã được lưu, đường dẫn:', this.pendingFileUri);
+          }
+
+          if (this.onComplete) this.onComplete();
+          this.incomingFileInfo = null;
+        }
+      } catch (err) {
+        console.error('❌ Lỗi khi ghi đĩa IO:', err);
+      }
+    }
+    this.isWriting = false;
+  }
+
   async startCall(targetId: string) {
     this.init(targetId);
-
-    // Khởi tạo DataChannel với tên 'PeerDropChannel'
     this.dataChannel = this.peerConnection.createDataChannel('PeerDropChannel');
     this.setupDataChannelListeners();
-
-    // Tạo vé mời (Offer) và lưu lại
     const offer = await this.peerConnection.createOffer();
     await this.peerConnection.setLocalDescription(offer);
-
-    // Gửi Offer cho đối tác qua Server
     socketService.socket?.emit('webrtc-signal', {
       toId: targetId,
       signalData: { type: 'offer', offer },
     });
-    console.log(`📤 [WebRTC] Đã gửi Offer tới ${targetId}`);
   }
 
   async sendFile(file: any) {
-    // Tạm thời cứ log ra. 
-    // Khi chạy trên Web, hệ thống tự động bỏ qua file này và xài hàm ở file .web.ts
-    // Sau này build app điện thoại thật chúng ta sẽ viết thuật toán băm file vào đây.
-    console.log('[Native] Chuẩn bị gửi file:', file?.name);
+    console.log('[Native] Bắt đầu truyền file:', file?.name);
     this.pendingFile = file;
   }
 
-
-  // 4. LẮNG NGHE VÀ XỬ LÝ TÍN HIỆU TỪ SOCKET
   initSignalListener() {
     if (!socketService.socket) return;
-    
-    // Đảm bảo không bị lặp sự kiện
     socketService.socket.off('webrtc-signal');
-    
     socketService.socket.on('webrtc-signal', async (payload: any) => {
       const { fromId, signalData } = payload;
-      
-      // MÁY NHẬN: Khi thấy Offer đến
       if (signalData.type === 'offer') {
-        console.log(`📥 [WebRTC] Nhận được Offer từ ${fromId}`);
         this.init(fromId);
         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.offer));
-        
-        // Tạo câu trả lời (Answer)
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
-        
-        socketService.socket?.emit('webrtc-signal', {
-          toId: fromId,
-          signalData: { type: 'answer', answer },
-        });
+        socketService.socket?.emit('webrtc-signal', { toId: fromId, signalData: { type: 'answer', answer } });
       } 
-      // MÁY GỬI: Khi thấy Answer phản hồi
       else if (signalData.type === 'answer') {
-        console.log(`📥 [WebRTC] Nhận được Answer từ ${fromId}`);
         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signalData.answer));
       } 
-      // CẢ 2 MÁY: Trao đổi IP (ICE)
       else if (signalData.type === 'ice-candidate') {
-        try {
-          await this.peerConnection.addIceCandidate(new RTCIceCandidate(signalData.candidate));
-        } catch (e) {
-          console.error('Lỗi khi add ICE Candidate', e);
-        }
+        try { await this.peerConnection.addIceCandidate(new RTCIceCandidate(signalData.candidate)); } 
+        catch (e) {}
       }
     });
   }
