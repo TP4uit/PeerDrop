@@ -69,7 +69,6 @@ export default function TransferScreen() {
 
   // Simulate transfer progress (pausable)
   useEffect(() => {
-    // 1. Nếu đang chuyển file, đăng ký hàm lắng nghe %
     if (isTransferring && !isPaused) {
       webRTCService.onProgress = (percent) => {
         setProgress(percent);
@@ -79,9 +78,17 @@ export default function TransferScreen() {
         setProgress(100);
         setIsTransferring(false);
       };
+
+      // --- THÊM ĐOẠN NÀY VÀO DƯỚI CÙNG ---
+      // Nếu có file đang nằm chờ, ra lệnh gửi ngay khi màn hình đã sẵn sàng
+      if (webRTCService.pendingFile) {
+        webRTCService.sendFile(webRTCService.pendingFile);
+        
+        // Xóa file trong kho đi để không bị gửi lặp lại
+        webRTCService.pendingFile = null; 
+      }
     }
 
-    // 2. Dọn dẹp kết nối UI khi huỷ
     return () => {
       webRTCService.onProgress = null;
       webRTCService.onComplete = null;

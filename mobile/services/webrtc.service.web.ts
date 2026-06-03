@@ -12,6 +12,8 @@ class WebRTCService {
   public dataChannel: RTCDataChannel | null = null;
   public targetSocketId: string | null = null;
 
+  public pendingFile: any = null;
+
   public onProgress: ((percent: number) => void) | null = null;
   public onComplete: (() => void) | null = null;
   private lastReportedProgress = -1; // Dùng để tránh UI bị giật lag do render quá nhiều

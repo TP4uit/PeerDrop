@@ -18,6 +18,8 @@ class WebRTCService {
   public dataChannel: any = null;
   public targetSocketId: string | null = null;
 
+  public pendingFile: any = null;
+
   public onProgress: ((percent: number) => void) | null = null;
   public onComplete: (() => void) | null = null;
   private lastReportedProgress = -1; // Dùng để tránh UI bị giật lag do render quá nhiều
@@ -87,6 +89,7 @@ class WebRTCService {
     // Khi chạy trên Web, hệ thống tự động bỏ qua file này và xài hàm ở file .web.ts
     // Sau này build app điện thoại thật chúng ta sẽ viết thuật toán băm file vào đây.
     console.log('[Native] Chuẩn bị gửi file:', file?.name);
+    this.pendingFile = file;
   }
 
 

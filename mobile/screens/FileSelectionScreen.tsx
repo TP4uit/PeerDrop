@@ -11,7 +11,9 @@ import {
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import { DocumentPickerAsset } from 'expo-document-picker';
 import { webRTCService } from '../services/webrtc.service';
+
 
 interface FileItem {
   id: string;
@@ -68,30 +70,46 @@ const formatFileSize = (size: number) => {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const normalizeDocuments = (result: any): FileItem[] => {
-  const output = (result as any).output ?? result;
-  const docs = Array.isArray(output) ? output : [output];
+const normalizeDocuments = (assets: DocumentPickerAsset[]): FileItem[] => {
+    return assets.map((doc) => {
+      const uri = doc.uri || '';
+      
+      let name = doc.name;
+      if (!name) {
+        const uriParts = uri.split('/');
+        name = uriParts[uriParts.length - 1] || 'Unknown File';
+      }
 
-  return docs
-    .filter(Boolean)
-    .map((doc: any) => {
-      const name = doc.name ?? doc.uri?.split('/').pop() ?? 'Unknown file';
-      const uri = doc.uri ?? '';
-      const size = typeof doc.size === 'number' ? doc.size : 0;
-      const type = getItemType(doc.mimeType, name);
+      // Ép kiểu any để TypeScript không báo lỗi khi lấy thuộc tính 'file' của Web
+      const rawFile = (doc as any).file;
+      const size = rawFile?.size || doc.size || 0;
+
+      let type: FileItem['type'] = 'document';
+      const mimeType = doc.mimeType?.toLowerCase() || '';
+
+      if (mimeType.startsWith('image/')) type = 'image';
+      else if (mimeType.startsWith('video/')) type = 'video';
+      else if (mimeType.startsWith('audio/')) type = 'audio';
+
+      const typeColor = {
+        image: '#3058FF',
+        video: '#9D4DFF',
+        audio: '#4BC6D8',
+        document: '#FF9B3D',
+      };
 
       return {
         id: uri || `${name}-${Math.random().toString(36).slice(2)}`,
         uri,
         name,
-        size,
+        size, 
         type,
         color: typeColor[type],
         selected: true,
-        rawFile: doc.file,
+        rawFile: rawFile, // Chứa data thực để WebRTC gửi đi
       };
     });
-};
+  };
 
 export default function FileSelectionScreen() {
   const router = useRouter();
@@ -120,11 +138,14 @@ export default function FileSelectionScreen() {
         copyToCacheDirectory: false,
       });
 
-      if ('type' in result && result.type === 'cancel') {
+      // Tương thích với cả SDK cũ và mới
+      if (result.canceled || ('type' in result && result.type === 'cancel')) {
         return;
       }
 
-      const pickedFiles = normalizeDocuments(result);
+      // TRUYỀN mảng assets VÀO THAY VÌ truyền toàn bộ result
+      const pickedFiles = normalizeDocuments(result.assets || []);
+      
       if (pickedFiles.length === 0) {
         return;
       }
@@ -168,10 +189,7 @@ export default function FileSelectionScreen() {
       const firstSelectedFile = files.find((f) => f.selected)?.rawFile;
 
       if (firstSelectedFile) {
-        // 🚀 BẮN DỮ LIỆU QUA ĐƯỜNG ỐNG P2P
-        webRTCService.sendFile(firstSelectedFile);
-      } else {
-        console.warn('Lỗi: Không tìm thấy object file để gửi!');
+        webRTCService.pendingFile = firstSelectedFile;
       }
 
       // Chuyển sang màn hình Transfer như cũ
