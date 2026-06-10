@@ -14,8 +14,8 @@ class WebRTCService {
 
   public pendingFile: any = null;
 
-  public onProgress: ((percent: number) => void) | null = null;
-  public onComplete: (() => void) | null = null;
+  public onProgress: ((percent: number, transferredBytes?: number, totalBytes?: number) => void) | null = null;
+  public onComplete: ((fileInfo?: any) => void) | null = null;
   private lastReportedProgress = -1;
 
   // --- BIẾN TRẠNG THÁI NHẬN FILE ---
@@ -48,7 +48,7 @@ class WebRTCService {
 
     const progress = Math.round((this.receivedSize / this.incomingFileInfo.size) * 100);
     if (progress !== this.lastReportedProgress) {
-      if (this.onProgress) this.onProgress(progress);
+      if (this.onProgress) this.onProgress(progress, this.receivedSize, this.incomingFileInfo.size);
       this.lastReportedProgress = progress;
     }
 
@@ -56,7 +56,8 @@ class WebRTCService {
     if (this.receivedSize >= this.incomingFileInfo.size) {
       console.log('✅ Đã nhận xong toàn bộ mảnh ghép từ Mobile!');
       this.saveReceivedFile();
-      if (this.onComplete) this.onComplete();
+      const completedFileInfo = this.incomingFileInfo;
+      if (this.onComplete) this.onComplete(completedFileInfo);
       
       // Reset biến để nhận file tiếp theo
       this.incomingFileInfo = null;
@@ -172,11 +173,13 @@ class WebRTCService {
         offset += slice.byteLength;
 
         const progress = Math.round((offset / buffer.byteLength) * 100);
+        if (this.onProgress) this.onProgress(progress, offset, buffer.byteLength);
         if (progress % 10 === 0 || progress === 100) {
           console.log(`📤 Đang đẩy lên mạng... ${progress}%`);
         }
       }
       console.log('✅ Đã đẩy toàn bộ file lên đường ống thành công!');
+      if (this.onComplete) this.onComplete(metadata);
     };
 
     sendChunk();

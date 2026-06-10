@@ -46,8 +46,8 @@ class WebRTCService {
   public onConnected: ((remoteDeviceName: string) => void) | null = null;
   public pendingFile: any = null;
 
-  public onProgress: ((percent: number) => void) | null = null;
-  public onComplete: (() => void) | null = null;
+  public onProgress: ((percent: number, transferredBytes?: number, totalBytes?: number) => void) | null = null;
+  public onComplete: ((fileInfo?: any) => void) | null = null;
   private lastReportedProgress = -1;
 
   private incomingFileInfo: any = null;
@@ -163,7 +163,7 @@ class WebRTCService {
 
         const progress = Math.round((this.receivedSize / this.incomingFileInfo.size) * 100);
         if (progress !== this.lastReportedProgress) {
-          if (this.onProgress) this.onProgress(progress);
+          if (this.onProgress) this.onProgress(progress, this.receivedSize, this.incomingFileInfo.size);
           this.lastReportedProgress = progress;
           
           if (progress % 10 === 0 || progress === 100) {
@@ -211,7 +211,8 @@ class WebRTCService {
             }
           }
 
-          if (this.onComplete) this.onComplete();
+          const completedFileInfo = this.incomingFileInfo;
+          if (this.onComplete) this.onComplete(completedFileInfo);
           
           // Đóng sập các biến lại để kết thúc phiên truyền tải và chuẩn bị cho file tiếp theo
           this.incomingFileInfo = null;
@@ -286,6 +287,7 @@ class WebRTCService {
 
           // Báo cáo UI
           const progress = Math.round((offset / file.size) * 100);
+          if (this.onProgress) this.onProgress(progress, offset, file.size);
           if (progress % 10 === 0 || progress === 100) {
             console.log(`📤 [Mobile] Đang đẩy lên mạng... ${progress}%`);
           }
@@ -295,6 +297,7 @@ class WebRTCService {
         }
       }
       console.log('✅ [Mobile] Đã đẩy toàn bộ file lên đường ống thành công!');
+      if (this.onComplete) this.onComplete(metadata);
     };
 
     sendChunk(); // Kích hoạt luồng chạy

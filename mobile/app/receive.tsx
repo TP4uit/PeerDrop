@@ -12,6 +12,15 @@ import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { socketService } from '@/services/socket.service';
 import { webRTCService } from '@/services/webrtc.service';
+import { addTransferHistoryItem } from '@/utils/transferHistory';
+
+const formatFileSize = (size = 0) => {
+  if (!size) return '0 B';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
 
 const RadarWave = ({ delay }: { delay: number }) => {
   const anim = useRef(new Animated.Value(0)).current;
@@ -62,6 +71,7 @@ export default function ReceiveScreen() {
   const radarSize = Math.min(width - 40, 340);
   const [stage, setStage] = useState<'waiting' | 'success' | 'connected'>('waiting');
   const [senderName, setSenderName] = useState<string>('');
+  const senderNameRef = useRef('');
 
   useEffect(() => {
     // 📍 VIỆC 2 CỦA PHÚC: Mở cửa phát sóng khi vừa vào màn hình
@@ -76,6 +86,7 @@ export default function ReceiveScreen() {
     // 📍 VIỆC 4 CỦA PHÚC: Đăng ký hàm callback lắng nghe đường ống P2P thông xe
     // Khi kết nối thành công, Phúc sẽ gọi hàm callback này từ Service ngầm
     webRTCService.onConnected = (remoteDeviceName: string) => {
+      senderNameRef.current = remoteDeviceName;
       setSenderName(remoteDeviceName); // Cập nhật tên máy gửi thật
       
       // Bật Pop-up thành công (stage = 'success')
@@ -87,10 +98,22 @@ export default function ReceiveScreen() {
       }, 2000);
     };
 
+    webRTCService.onComplete = async (fileInfo?: any) => {
+      await addTransferHistoryItem({
+        id: `${Date.now()}`,
+        fileName: fileInfo?.name || 'Received file',
+        device: senderNameRef.current || 'Unknown Device',
+        date: new Date().toLocaleString(),
+        size: formatFileSize(fileInfo?.size || 0),
+        status: 'completed',
+      });
+    };
+
     return () => {
       // Rời khỏi phòng và tắt lắng nghe khi user thoát khỏi màn hình Receive
       socketService.socket?.emit('leave-room');
       if (webRTCService.onConnected) webRTCService.onConnected = null; // Clean up listener
+      if (webRTCService.onComplete) webRTCService.onComplete = null;
     };
   }, []);
 
@@ -188,7 +211,7 @@ export default function ReceiveScreen() {
             </View>
             <Text style={styles.successTitle}>Connection Successful!</Text>
             <Text style={styles.successDescription}>
-              You are securely connected to David's Android.
+              You are securely connected to {senderName || 'the sender'}.
             </Text>
           </View>
         </View>

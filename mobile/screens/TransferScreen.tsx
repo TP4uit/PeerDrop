@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -30,20 +30,44 @@ interface TransferStats {
   total: string;
 }
 
+const formatBytes = (bytes = 0) => {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
+
+const formatSpeed = (bytesPerSecond = 0) => {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 B/s';
+  return `${formatBytes(bytesPerSecond)}/s`;
+};
+
+const formatTimeRemaining = (seconds = 0) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s';
+  if (seconds < 60) return `${Math.ceil(seconds)}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.ceil(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
+};
+
 export default function TransferScreen() {
   const router = useRouter();
   const { deviceName, fileCount, totalSize } = useLocalSearchParams();
   const { width } = useWindowDimensions();
+  const transferStartTimeRef = useRef<number | null>(null);
+  const activeTotalBytesRef = useRef(webRTCService.pendingFile?.size || 0);
 
   const [progress, setProgress] = useState(0);
   const [isTransferring, setIsTransferring] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [stats, setStats] = useState<TransferStats>({
-    speed: '12.5 MB/s',
-    timeRemaining: '8s',
-    transferred: '95 MB',
-    total: (totalSize as string) || '0 MB',
+    speed: '0 B/s',
+    timeRemaining: '0s',
+    transferred: '0 B',
+    total: (totalSize as string) || formatBytes(activeTotalBytesRef.current),
   });
 
   // Animation for connection line
@@ -67,22 +91,58 @@ export default function TransferScreen() {
     );
   }, []);
 
-  // Simulate transfer progress (pausable)
+  // Track transfer progress from the WebRTC service.
   useEffect(() => {
     if (isTransferring && !isPaused) {
-      webRTCService.onProgress = (percent) => {
+      webRTCService.onProgress = (percent, transferredBytes, totalBytes) => {
+        const now = Date.now();
+        if (!transferStartTimeRef.current) {
+          transferStartTimeRef.current = now;
+        }
+
+        const total = totalBytes || activeTotalBytesRef.current;
+        const transferred = transferredBytes ?? Math.round((total * percent) / 100);
+        activeTotalBytesRef.current = total;
+
+        const elapsedSeconds = Math.max((now - transferStartTimeRef.current) / 1000, 0.001);
+        const bytesPerSecond = transferred / elapsedSeconds;
+        const remainingSeconds = bytesPerSecond > 0 ? (total - transferred) / bytesPerSecond : 0;
+
         setProgress(percent);
+        setStats({
+          speed: formatSpeed(bytesPerSecond),
+          timeRemaining: formatTimeRemaining(remainingSeconds),
+          transferred: formatBytes(transferred),
+          total: formatBytes(total),
+        });
       };
 
-      webRTCService.onComplete = () => {
+      webRTCService.onComplete = (fileInfo) => {
+        const total = fileInfo?.size || activeTotalBytesRef.current;
         setProgress(100);
+        setStats((currentStats) => ({
+          ...currentStats,
+          timeRemaining: '0s',
+          transferred: formatBytes(total),
+          total: formatBytes(total),
+        }));
         setIsTransferring(false);
       };
 
       // --- THÊM ĐOẠN NÀY VÀO DƯỚI CÙNG ---
       // Nếu có file đang nằm chờ, ra lệnh gửi ngay khi màn hình đã sẵn sàng
       if (webRTCService.pendingFile) {
-        webRTCService.sendFile(webRTCService.pendingFile);
+        const fileToSend = webRTCService.pendingFile;
+        activeTotalBytesRef.current = fileToSend.size || activeTotalBytesRef.current;
+        transferStartTimeRef.current = Date.now();
+        setStats({
+          speed: '0 B/s',
+          timeRemaining: '0s',
+          transferred: '0 B',
+          total: formatBytes(activeTotalBytesRef.current),
+        });
+
+        webRTCService.sendFile(fileToSend);
         
         // Xóa file trong kho đi để không bị gửi lặp lại
         webRTCService.pendingFile = null; 
@@ -94,22 +154,6 @@ export default function TransferScreen() {
       webRTCService.onComplete = null;
     };
   }, [isTransferring, isPaused]);
-
-  // Update stats based on progress
-  useEffect(() => {
-    if (totalSize) {
-      const totalNum = parseFloat(totalSize as string) || 0;
-      const transferred = (totalNum * progress) / 100;
-      const timeRemaining = progress > 0 ? Math.ceil((100 - progress) / 20) : 0;
-
-      setStats({
-        speed: (Math.random() * 5 + 10).toFixed(1) + ' MB/s',
-        timeRemaining: timeRemaining + 's',
-        transferred: transferred.toFixed(1) + ' MB',
-        total: totalSize as string,
-      });
-    }
-  }, [progress, totalSize]);
 
   const animatedLineStyle = useAnimatedStyle(() => ({
     opacity: lineOpacity.value,
@@ -150,6 +194,13 @@ export default function TransferScreen() {
 
   const handleSendAgain = () => {
     setProgress(0);
+    transferStartTimeRef.current = null;
+    setStats({
+      speed: '0 B/s',
+      timeRemaining: '0s',
+      transferred: '0 B',
+      total: (totalSize as string) || formatBytes(activeTotalBytesRef.current),
+    });
     setIsTransferring(true);
     setIsPaused(false);
   };
@@ -207,6 +258,7 @@ export default function TransferScreen() {
         <View style={styles.fileInfoDivider} />
         <View style={styles.fileInfoRow}>
           <Text style={styles.fileInfoLabel}>Total Size</Text>
+          <Text style={styles.fileInfoValue}>{stats.total}</Text>
         </View>
 
         <View style={styles.statItem}>
@@ -216,6 +268,20 @@ export default function TransferScreen() {
             <Text style={styles.statValue}>
               {stats.transferred} / {stats.total}
             </Text>
+          </View>
+        </View>
+        <View style={styles.statItem}>
+          <MaterialCommunityIcons name="speedometer" size={20} color="#00E19B" />
+          <View style={styles.statContent}>
+            <Text style={styles.statLabel}>Speed</Text>
+            <Text style={styles.statValue}>{stats.speed}</Text>
+          </View>
+        </View>
+        <View style={styles.statItem}>
+          <MaterialCommunityIcons name="timer-outline" size={20} color="#F6C453" />
+          <View style={styles.statContent}>
+            <Text style={styles.statLabel}>Time Remaining</Text>
+            <Text style={styles.statValue}>{stats.timeRemaining}</Text>
           </View>
         </View>
       </View>
