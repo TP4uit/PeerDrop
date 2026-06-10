@@ -7,6 +7,7 @@ import {
   useWindowDimensions,
   Animated,
   Easing,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -393,7 +394,8 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 24,
+    marginBottom: 12,
+    paddingBottom: Platform.OS === 'android' ? 36 : 24,
   },
   qrButton: {
     flexDirection: 'row',

@@ -9,6 +9,7 @@ import {
   Easing,
   Image,
   Alert,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -507,6 +508,7 @@ const styles = StyleSheet.create({
 
   bottomActions: {
     padding: 20,
+    paddingBottom: Platform.OS === 'android' ? 36 : 24,
   },
 
   galleryButton: {
