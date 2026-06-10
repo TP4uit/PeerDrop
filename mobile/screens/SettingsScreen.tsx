@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,15 +15,22 @@ import {
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { clearTransferHistory } from '@/utils/transferHistory';
+import * as Device from 'expo-device';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [saveToGallery, setSaveToGallery] = useState(true);
   const [editModalVisible, setEditModalVisible] = useState(false);
-  const [profileName, setProfileName] = useState('Alex\'s iPhone');
-  const [profileEmail, setProfileEmail] = useState('alex.doe@example.com');
-  const [tempName, setTempName] = useState(profileName);
-  const [tempEmail, setTempEmail] = useState(profileEmail);
+  const [profileName, setProfileName] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [tempName, setTempName] = useState('');
+  const [tempEmail, setTempEmail] = useState('');
+
+  useEffect(() => {
+    const deviceName = Device.modelName || (Device.osName ? `${Device.osName} device` : 'My Device');
+    setProfileName(deviceName);
+    setTempName(deviceName);
+  }, []);
 
   const handleClearHistory = () => {
     Alert.alert(
