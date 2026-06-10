@@ -1,117 +1,202 @@
-import { io, Socket } from 'socket.io-client';
-import { Platform } from 'react-native';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import * as Device from 'expo-device';
+import { io, Socket } from 'socket.io-client';
 
-// Tự động lấy IP của máy tính đang chạy Metro Bundler
-const getDevServerIP = () => {
-  // Nếu đang chạy trên máy ảo Android, luôn trả về IP đại diện cho localhost của máy host
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:3000';
-  }
-
-  const hostUri = Constants.expoConfig?.hostUri;
-  if (hostUri) {
-    const machineIp = hostUri.split(':')[0];
-    return `http://${machineIp}:3000`;
-  }
-  return 'http://localhost:3000';
+type UserInfo = {
+  deviceId: string;
+  nickname: string;
+  avatar: string;
 };
 
-const SERVER_URL = getDevServerIP();
+const DEVICE_ID_KEY = '@peerdrop_deviceId';
+const NICKNAME_KEY = '@peerdrop_nickname';
+
+function createDeviceId() {
+  return `device-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function readConfiguredServerUrl() {
+  const envUrl = process.env.EXPO_PUBLIC_SIGNALING_URL;
+  const extra = Constants.expoConfig?.extra as Record<string, unknown> | undefined;
+  const extraUrl = extra?.signalingUrl;
+
+  if (typeof envUrl === 'string' && envUrl.trim()) {
+    return envUrl.trim();
+  }
+
+  if (typeof extraUrl === 'string' && extraUrl.trim()) {
+    return extraUrl.trim();
+  }
+
+  // Expo exposes the LAN address of Metro in development. This is a useful
+  // fallback for real devices on the same Wi-Fi, without hardcoding emulator IPs.
+  const hostUri = Constants.expoConfig?.hostUri;
+  if (hostUri) {
+    const host = hostUri.split(':')[0];
+    return `http://${host}:3000`;
+  }
+
+  return undefined;
+}
 
 class SocketService {
   public socket: Socket | null = null;
-  public deviceId: string = '';
-  public nickname: string = '';
-  public avatar: string = '';
+  public deviceId = '';
+  public nickname = '';
+  public avatar = '';
+  public serverUrl = '';
 
-  // 1. HÀM KHỞI TẠO ĐỊNH DANH
+  private lastRoomId: string | null = null;
+  private connectPromise: Promise<Socket> | null = null;
+
   async initializeIdentity() {
     try {
-      // Đọc bộ nhớ xem máy này từng vào app chưa
-      const storedDeviceId = await AsyncStorage.getItem('@peerdrop_deviceId');
-      const storedNickname = await AsyncStorage.getItem('@peerdrop_nickname');
+      const [storedDeviceId, storedNickname] = await Promise.all([
+        AsyncStorage.getItem(DEVICE_ID_KEY),
+        AsyncStorage.getItem(NICKNAME_KEY),
+      ]);
 
-      if (storedDeviceId && storedNickname) {
-        // NẾU LÀ MÁY CŨ: Lấy lại dữ liệu cũ
-        this.deviceId = storedDeviceId;
-        this.nickname = storedNickname;
-        console.log('✅ [Identity] Đã tải định danh máy cũ:', this.nickname);
-      } else {
-        // NẾU LÀ MÁY MỚI (Lần đầu mở app):
-        // Sinh ID duy nhất dựa vào thời gian thực
-        this.deviceId = `device-${Math.random().toString(36).substring(2, 10)}-${Date.now()}`;
-        
-        // Lấy tên thiết bị thật. Device.deviceName lấy tên người dùng tự đặt (VD: "Phúc's Phone"), 
-        // fallback sang modelName (VD: "SM-A166B")
-        const realDeviceName = Device.deviceName || Device.modelName || 'Thiết bị không xác định';
-        this.nickname = realDeviceName;
+      this.deviceId = storedDeviceId || createDeviceId();
+      this.nickname =
+        storedNickname ||
+        Device.deviceName ||
+        Device.modelName ||
+        'Unknown Device';
 
-        // Lưu vào bộ nhớ máy để các lần sau không bị mất
-        await AsyncStorage.setItem('@peerdrop_deviceId', this.deviceId);
-        await AsyncStorage.setItem('@peerdrop_nickname', this.nickname);
-        console.log('✅ [Identity] Đã tạo và lưu định danh máy mới:', this.nickname);
-      }
-      
-      // Tạo avatar vui nhộn dựa trên ID
-      this.avatar = `https://api.dicebear.com/7.x/identicon/svg?seed=${this.deviceId}`;
-      
+      await Promise.all([
+        AsyncStorage.setItem(DEVICE_ID_KEY, this.deviceId),
+        AsyncStorage.setItem(NICKNAME_KEY, this.nickname),
+      ]);
+
+      this.avatar = `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(
+        this.deviceId,
+      )}`;
     } catch (error) {
-      console.error('⚠️ [Identity] Lỗi khởi tạo định danh:', error);
+      console.error('[Socket] Failed to initialize device identity:', error);
+      this.deviceId = this.deviceId || createDeviceId();
+      this.nickname = this.nickname || Device.modelName || 'Unknown Device';
+      this.avatar = `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(
+        this.deviceId,
+      )}`;
     }
   }
 
-  // 2. HÀM KẾT NỐI (Đã chuyển thành async)
-  async connect() {
-    if (this.socket?.connected) return;
+  getUserInfo(): UserInfo {
+    return {
+      deviceId: this.deviceId,
+      nickname: this.nickname,
+      avatar: this.avatar,
+    };
+  }
 
-    // Đảm bảo định danh đã sẵn sàng TRƯỚC KHI kết nối socket
+  async connect(serverUrl?: string) {
+    if (this.socket?.connected) {
+      return this.socket;
+    }
+
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    this.connectPromise = this.connectInternal(serverUrl);
+
+    try {
+      return await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  private async connectInternal(serverUrl?: string) {
     if (!this.deviceId) {
       await this.initializeIdentity();
     }
 
-    this.socket = io(SERVER_URL, {
+    const resolvedUrl = serverUrl?.trim() || readConfiguredServerUrl();
+    if (!resolvedUrl) {
+      throw new Error(
+        'Missing signaling server URL. Set EXPO_PUBLIC_SIGNALING_URL, app config extra.signalingUrl, or pass socketService.connect(url).',
+      );
+    }
+
+    if (this.socket) {
+      this.socket.removeAllListeners();
+      this.socket.disconnect();
+      this.socket = null;
+    }
+
+    this.serverUrl = resolvedUrl;
+    this.socket = io(resolvedUrl, {
       transports: ['websocket'],
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 5000,
+      timeout: 10000,
+      auth: this.getUserInfo(),
+      query: {
+        deviceId: this.deviceId,
+      },
     });
 
     this.socket.on('connect', () => {
-      console.log(`✅ [Socket] Kết nối thành công (${this.nickname}) - ID:`, this.socket?.id);
+      console.log(`[Socket] Connected to ${resolvedUrl} as ${this.nickname}`);
+
+      // Socket.io gives a new socket.id after reconnect. Re-announce the stable
+      // device identity and rejoin the last room so the UI does not lose state.
+      this.socket?.emit('device-online', {
+        userInfo: this.getUserInfo(),
+      });
+
+      if (this.lastRoomId) {
+        this.emitJoinRoom(this.lastRoomId);
+      }
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('❌ [Socket] Đã ngắt kết nối');
+    this.socket.on('reconnect', (attempt) => {
+      console.log(`[Socket] Reconnected after ${attempt} attempt(s)`);
     });
+
+    this.socket.on('connect_error', (error) => {
+      console.warn('[Socket] Connection error:', error.message);
+    });
+
+    this.socket.on('disconnect', (reason) => {
+      console.log('[Socket] Disconnected:', reason);
+    });
+
+    return this.socket;
   }
 
-  // 3. HÀM VÀO PHÒNG
   joinRoom(roomId: string) {
+    this.lastRoomId = roomId;
+
     if (!this.socket?.connected) {
-      console.warn('Socket chưa kết nối, không thể join room!');
+      console.warn('[Socket] Cannot join room before socket is connected');
       return;
     }
-    
-    this.socket.emit('join-room', {
-      roomId: roomId,
-      userInfo: {
-        nickname: this.nickname,
-        avatar: this.avatar
-      }
+
+    this.emitJoinRoom(roomId);
+  }
+
+  private emitJoinRoom(roomId: string) {
+    this.socket?.emit('join-room', {
+      roomId,
+      userInfo: this.getUserInfo(),
     });
   }
 
   leaveRoom() {
-    if (this.socket?.connected) {
-      this.socket.emit('leave-room');
-      console.log('📤 [Socket] Đã rời phòng phát sóng');
-    }
+    this.lastRoomId = null;
+    this.socket?.emit('leave-room');
   }
 
   disconnect() {
+    this.lastRoomId = null;
+
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
     }
