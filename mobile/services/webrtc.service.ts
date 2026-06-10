@@ -6,6 +6,7 @@ import {
 import { socketService } from './socket.service';
 import RNFS from 'react-native-fs'; // 🔥 Dùng thư viện Native để có lệnh Append
 import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system';
 
 const configuration = {
   iceServers: [
@@ -238,8 +239,81 @@ class WebRTCService {
   }
 
   async sendFile(file: any) {
-    console.log('[Native] Bắt đầu truyền file:', file?.name);
+    if (!this.dataChannel) {
+      alert('Chưa kết nối P2P! Vui lòng quét Radar hoặc mã QR để ghép đôi lại.');
+      return;
+    }
+    if (this.dataChannel.readyState !== 'open') {
+      alert(`Kênh truyền chưa sẵn sàng. Vui lòng chờ 1-2 giây hoặc ghép đôi lại.`);
+      return;
+    }
+
+    const actualSize = file.size || file.fileSize;
+    const actualName = file.name || file.fileName || 'PeerDrop_File';
+
+    if (!actualSize) {
+       alert('Không thể đọc được dung lượng file. Vui lòng chọn file khác!');
+       return;
+    }
+
+    console.log(`[Mobile] Bắt đầu truyền: ${actualName} (${actualSize} bytes)`);
     this.pendingFile = file;
+
+    const metadata = { 
+      name: actualName, 
+      size: actualSize, 
+      fileType: file.mimeType || 'application/octet-stream' 
+    };
+    this.dataChannel.send(JSON.stringify({ type: 'file-meta', metadata }));
+
+    const chunkSize = 16 * 1024;
+    let offset = 0;
+    const filePath = file.uri;
+
+    const sendChunk = async () => {
+      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+        alert('Lỗi: Kênh truyền bị ngắt đột ngột trong lúc gửi!');
+        return;
+      }
+
+      while (offset < actualSize) {
+        if (this.dataChannel.bufferedAmount > 1024 * 1024) {
+          setTimeout(sendChunk, 50);
+          return;
+        }
+
+        try {
+          const readBytes = Math.min(chunkSize, actualSize - offset);
+          
+          // 🔥 ĐỔI ĐỘNG CƠ ĐỌC: Dùng expo-file-system để "nhai" ngọt xớt đường dẫn content://
+          const base64Chunk = await FileSystem.readAsStringAsync(filePath, {
+            encoding: 'base64',
+            position: offset,
+            length: readBytes
+          } as any);
+
+          if (!base64Chunk) {
+              throw new Error('Dữ liệu đọc ra bị rỗng');
+          }
+
+          this.dataChannel.send(base64Chunk);
+          
+          offset += readBytes;
+
+          const progress = Math.round((offset / actualSize) * 100);
+          if (progress % 10 === 0 || progress === 100) {
+            console.log(`📤 [Mobile] Đang đẩy lên mạng... ${progress}%`);
+          }
+        } catch (error) {
+          console.error('❌ Lỗi khi đọc file từ ổ cứng:', error);
+          alert('Lỗi khi truy xuất ổ cứng điện thoại!');
+          return;
+        }
+      }
+      console.log('✅ [Mobile] Đã đẩy toàn bộ file lên đường ống thành công!');
+    };
+
+    sendChunk();
   }
 
   initSignalListener() {

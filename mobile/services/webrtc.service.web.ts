@@ -7,7 +7,7 @@ const configuration = {
   ],
 };
 
-class WebRTCService {
+ class WebRTCService {
   public peerConnection: RTCPeerConnection | null = null;
   public dataChannel: RTCDataChannel | null = null;
   public targetSocketId: string | null = null;
@@ -72,7 +72,13 @@ class WebRTCService {
     this.dataChannel.binaryType = 'arraybuffer';
 
     this.dataChannel.onopen = () => {
-      console.log('🔥 [WebRTC-Web] Ống truyền dữ liệu đã mở! Đã sẵn sàng gửi/nhận file.');
+      console.log('[WebRTC-Web] Ống truyền dữ liệu đã mở!');
+      // Bổ sung gói tin Handshake để giao diện Mobile biết đường mở khóa
+      const handshakePayload = {
+        type: 'HANDSHAKE',
+        nickname: socketService.nickname || 'Web Browser'
+      };
+      this.dataChannel?.send(JSON.stringify(handshakePayload));
     };
 
     this.dataChannel.onmessage = (event) => {
