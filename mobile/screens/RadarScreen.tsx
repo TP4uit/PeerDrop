@@ -1,33 +1,64 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  useWindowDimensions,
   Animated,
   Easing,
   Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { socketService } from '../services/socket.service';
 import { webRTCService } from '../services/webrtc.service';
 
 interface AppDevice {
-  id: string;
-  name: string;
-  type: 'phone' | 'tablet' | 'computer';
-  position: { angle: number; radius: number };
-  isOnline: boolean;
+  socketId: string;
+  roomId?: string;
+  nickname?: string;
+  avatar?: string;
 }
 
+type DeviceType = 'phone' | 'tablet' | 'computer';
 
-const RadarWave = ({
-  delay,
-}: {
-  delay: number;
-}) => {
+const getDeviceName = (device: AppDevice) => device.nickname || 'Unknown Device';
+
+const getDeviceType = (device: AppDevice): DeviceType => {
+  const lowerName = getDeviceName(device).toLowerCase();
+
+  if (lowerName.includes('ipad') || lowerName.includes('tablet')) {
+    return 'tablet';
+  }
+
+  if (
+    lowerName.includes('mac') ||
+    lowerName.includes('pc') ||
+    lowerName.includes('laptop') ||
+    lowerName.includes('computer')
+  ) {
+    return 'computer';
+  }
+
+  return 'phone';
+};
+
+const getDeviceIcon = (device: AppDevice) => {
+  const type = getDeviceType(device);
+
+  if (type === 'tablet') {
+    return 'tablet';
+  }
+
+  if (type === 'computer') {
+    return 'laptop';
+  }
+
+  return 'cellphone';
+};
+
+const RadarWave = ({ delay }: { delay: number }) => {
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -47,7 +78,7 @@ const RadarWave = ({
     const timer = setTimeout(start, delay);
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [anim, delay]);
 
   const scale = anim.interpolate({
     inputRange: [0, 1],
@@ -80,70 +111,46 @@ export default function RadarScreen() {
   const centerOffset = radarSize / 2;
   const bubbleWidth = Math.min(132, radarSize * 0.34);
   const bubbleHeight = 78;
-  const [isScanning, setIsScanning] = useState(true);
 
   const [discoveredDevices, setDiscoveredDevices] = useState<AppDevice[]>([]);
+  const [selectedSocketId, setSelectedSocketId] = useState<string | null>(null);
 
   useEffect(() => {
-    // 1. Hàm lắng nghe kết quả từ server trả về
-    const handleRadarResult = (hosts: any[]) => {
-      // Lọc bỏ chính mình ra khỏi danh sách (không ai tự gửi file cho mình)
-      const otherDevices = hosts.filter(h => h.socketId !== socketService.socket?.id);
+    const socket = socketService.socket;
 
-      // Chuyển đổi dữ liệu server thành định dạng UI
-      const mappedDevices: AppDevice[] = otherDevices.map((host, index) => {
-        // Thuật toán chia đều góc để các máy không đè lên nhau trên UI
-        const angle = (index * (360 / Math.max(otherDevices.length, 1))) % 360;
-        const radius = index % 2 === 0 ? 0.36 : 0.48;
-        /*const radius = 0.35 + Math.random() * 0.15; */ // Khoảng cách ngẫu nhiên từ tâm
-
-        // 📍 ĐÃ SỬA: Phân tích nhanh tên máy để gán icon hiển thị tương ứng thật hơn
-        const lowerName = (host.nickname || '').toLowerCase();
-        let deviceType: 'phone' | 'tablet' | 'computer' = 'phone';
-        if (lowerName.includes('ipad') || lowerName.includes('tablet')) {
-          deviceType = 'tablet';
-        } else if (lowerName.includes('mac') || lowerName.includes('pc') || lowerName.includes('laptop') || lowerName.includes('computer')) {
-          deviceType = 'computer';
-        }
-
-        return {
-          id: host.roomId, // Dùng roomId để lát nữa bấm vào sẽ kết nối đúng máy
-          name: host.nickname || 'Unknown Device',
-          type: deviceType, 
-          position: { angle, radius },
-          isOnline: true,
-        };
-      });
-      
-      setDiscoveredDevices(mappedDevices);
+    const handleRadarResult = (data: AppDevice[]) => {
+      const devices = Array.isArray(data) ? data : [];
+      setDiscoveredDevices(devices);
     };
 
-    // 2. Bật kênh lắng nghe
-    socketService.socket?.on('radar-result', handleRadarResult);
+    socket?.on('radar-result', handleRadarResult);
+    socket?.emit('radar-scan');
 
-    // 3. Vòng lặp bắn tia radar mỗi 2 giây một lần để dò tìm liên tục
-    socketService.socket?.emit('radar-scan');
     const scanInterval = setInterval(() => {
       socketService.socket?.emit('radar-scan');
     }, 2000);
 
-    // 4. Hủy lắng nghe khi thoát màn hình
     return () => {
       clearInterval(scanInterval);
-      socketService.socket?.off('radar-result', handleRadarResult);
+      socket?.off('radar-result', handleRadarResult);
     };
   }, []);
 
   const handleDevicePress = (device: AppDevice) => {
-    if (!device.isOnline) return;
-    
-    // THÊM DÒNG NÀY: Bắn vé mời WebRTC đến máy vừa bấm
-    webRTCService.startCall(device.id);
+    if (!device.socketId) {
+      return;
+    }
 
-    // Vẫn chuyển qua màn hình chọn file (chúng ta sẽ gỡ giao diện chọn file sau)
+    setSelectedSocketId(device.socketId);
+    webRTCService.startCall(device.socketId);
+
     router.push({
       pathname: '/file-selection',
-      params: { deviceId: device.id, deviceName: device.name },
+      params: {
+        deviceId: device.socketId,
+        roomId: device.roomId,
+        deviceName: getDeviceName(device),
+      },
     });
   };
 
@@ -169,48 +176,32 @@ export default function RadarScreen() {
             },
           ]}
         >
-          {/* Radar waves */}
-          {Array.from({ length: 5}).map((_, index) => (
-            <RadarWave
-              key={index}
-              delay={index * 1000}
-            />
+          {Array.from({ length: 5 }).map((_, index) => (
+            <RadarWave key={index} delay={index * 1000} />
           ))}
-          
 
-          {/* Center glow */}
           <View style={styles.centerGlow} />
 
-          {/* Avatar */}
           <View style={styles.centerCircle}>
             <View style={styles.centerIcon}>
-              <MaterialCommunityIcons
-                name="account-circle"
-                size={42}
-                color="#C6F8E1"
-              />
+              <MaterialCommunityIcons name="account-circle" size={42} color="#C6F8E1" />
             </View>
           </View>
 
-          {/* Devices */}
-          {discoveredDevices.map((device) => {
-            const radians = (device.position.angle * Math.PI) / 180;
-
-            const dx =
-              Math.cos(radians) *
-              device.position.radius *
-              radarSize;
-
-            const dy =
-              Math.sin(radians) *
-              device.position.radius *
-              radarSize;
+          {discoveredDevices.map((device, index) => {
+            const angle = (index * (360 / Math.max(discoveredDevices.length, 1))) % 360;
+            const radius = index % 2 === 0 ? 0.36 : 0.48;
+            const radians = (angle * Math.PI) / 180;
+            const dx = Math.cos(radians) * radius * radarSize;
+            const dy = Math.sin(radians) * radius * radarSize;
+            const isSelected = selectedSocketId === device.socketId;
 
             return (
               <TouchableOpacity
-                key={device.id}
+                key={device.socketId}
                 style={[
                   styles.deviceBubble,
+                  isSelected && styles.deviceBubbleSelected,
                   {
                     width: bubbleWidth,
                     top: centerOffset + dy - bubbleHeight / 2,
@@ -220,25 +211,16 @@ export default function RadarScreen() {
                 activeOpacity={0.85}
                 onPress={() => handleDevicePress(device)}
               >
-                <View style={styles.deviceAvatar}>
+                <View style={[styles.deviceAvatar, isSelected && styles.deviceAvatarSelected]}>
                   <MaterialCommunityIcons
-                    name={
-                      device.type === 'phone'
-                        ? 'cellphone'
-                        : device.type === 'tablet'
-                        ? 'tablet'
-                        : 'laptop'
-                    }
+                    name={getDeviceIcon(device)}
                     size={22}
-                    color="#FFFFFF"
+                    color={isSelected ? '#05091B' : '#FFFFFF'}
                   />
                 </View>
 
-                <Text
-                  style={styles.deviceLabel}
-                  numberOfLines={1}
-                >
-                  {device.name}
+                <Text style={styles.deviceLabel} numberOfLines={1}>
+                  {getDeviceName(device)}
                 </Text>
               </TouchableOpacity>
             );
@@ -310,7 +292,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'rgba(0,225,155,0.55)',
   },
-
   centerGlow: {
     position: 'absolute',
     width: 140,
@@ -318,7 +299,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(0,225,155,0.08)',
   },
-
   centerCircle: {
     width: 112,
     height: 112,
@@ -337,7 +317,6 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 10,
   },
-
   centerIcon: {
     width: 72,
     height: 72,
@@ -346,7 +325,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(0,193,255,0.18)',
   },
-  
   deviceBubble: {
     position: 'absolute',
     minWidth: 94,
@@ -357,7 +335,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center',
-
     shadowColor: '#00E19B',
     shadowOffset: {
       width: 0,
@@ -367,7 +344,9 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 6,
   },
-
+  deviceBubbleSelected: {
+    borderColor: 'rgba(130, 247, 178, 0.72)',
+  },
   deviceAvatar: {
     width: 42,
     height: 42,
@@ -377,18 +356,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 10,
   },
+  deviceAvatarSelected: {
+    backgroundColor: '#82F7B2',
+  },
   deviceLabel: {
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700',
     textAlign: 'center',
-  },
-  infoText: {
-    color: '#A5B0D0',
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 20,
-    maxWidth: 280,
   },
   qrActions: {
     width: '100%',
@@ -409,19 +384,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0, 225, 155, 0.22)',
     backgroundColor: 'rgba(0, 225, 155, 0.08)',
-  },
-  qrButtonSecondary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    width: '90%',
-    maxWidth: 420,
-    paddingVertical: 16,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 225, 155, 0.18)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
   },
   qrButtonText: {
     color: '#00E19B',
