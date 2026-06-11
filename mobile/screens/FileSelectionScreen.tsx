@@ -1,215 +1,300 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
+  ActivityIndicator,
+  Alert,
   FlatList,
+  Image,
+  StyleSheet,
+  Text,
   TouchableOpacity,
   useWindowDimensions,
-  Alert,
+  View,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import * as DocumentPicker from 'expo-document-picker';
-import { DocumentPickerAsset } from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import { webRTCService } from '../services/webrtc.service';
 
+type MediaKind = 'image' | 'video';
 
-interface FileItem {
+interface SelectedMediaFile {
   id: string;
   uri: string;
+  thumbnailUri: string;
   name: string;
   size: number;
-  type: 'image' | 'video' | 'document' | 'audio';
-  color: string;
-  selected: boolean;
-  rawFile?: any;
+  type: MediaKind;
+  mimeType: string;
+  duration?: number;
 }
 
-const fileTabs = ['All', 'Photos', 'Videos', 'Documents', 'Music'] as const;
-const tabFilter: Record<typeof fileTabs[number], FileItem['type'][]> = {
-  All: ['image', 'video', 'document', 'audio'],
-  Photos: ['image'],
-  Videos: ['video'],
-  Documents: ['document'],
-  Music: ['audio'],
+interface MediaItem {
+  id: string;
+  asset: MediaLibrary.Asset;
+  thumbnailUri: string;
+  name: string;
+  type: MediaKind;
+  duration?: number;
+}
+
+const PAGE_SIZE = 60;
+const fileTabs = ['All', 'Photos', 'Videos'] as const;
+
+const extensionMimeTypes: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  webp: 'image/webp',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  m4v: 'video/x-m4v',
+  webm: 'video/webm',
+  '3gp': 'video/3gpp',
 };
 
-const iconByType: Record<FileItem['type'], React.ComponentProps<typeof MaterialCommunityIcons>['name']> = {
-  image: 'image',
-  video: 'video',
-  document: 'file-document',
-  audio: 'music-note',
-};
-
-const typeColor: Record<FileItem['type'], string> = {
-  image: '#3058FF',
-  video: '#9D4DFF',
-  document: '#FF9B3D',
-  audio: '#4BC6D8',
-};
-
-const getItemType = (mimeType?: string | null, filename?: string | null): FileItem['type'] => {
-  const lowerName = filename?.toLowerCase() ?? '';
-  if (mimeType?.startsWith('image') || lowerName.match(/\.(jpg|jpeg|png|gif|heic|heif|webp)$/)) {
-    return 'image';
+const getDeviceName = (value: string | string[] | undefined) => {
+  if (Array.isArray(value)) {
+    return value[0] ?? 'Device';
   }
-  if (mimeType?.startsWith('video') || lowerName.match(/\.(mp4|mov|mkv|webm|avi|3gp)$/)) {
-    return 'video';
-  }
-  if (mimeType?.startsWith('audio') || lowerName.match(/\.(mp3|wav|m4a|aac|ogg)$/)) {
-    return 'audio';
-  }
-  return 'document';
+
+  return value ?? 'Device';
 };
 
-const formatFileSize = (size: number) => {
-  if (!size) return '0 KB';
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(0)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+const getMediaType = (asset: MediaLibrary.Asset): MediaKind =>
+  asset.mediaType === MediaLibrary.MediaType.video ? 'video' : 'image';
+
+const getMimeType = (filename: string, type: MediaKind) => {
+  const extension = filename.split('.').pop()?.toLowerCase() ?? '';
+  return extensionMimeTypes[extension] ?? (type === 'video' ? 'video/mp4' : 'image/jpeg');
 };
 
-const normalizeDocuments = (assets: DocumentPickerAsset[]): FileItem[] => {
-    return assets.map((doc) => {
-      const uri = doc.uri || '';
-      
-      let name = doc.name;
-      if (!name) {
-        const uriParts = uri.split('/');
-        name = uriParts[uriParts.length - 1] || 'Unknown File';
-      }
+const formatBytes = (bytes = 0) => {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
 
-      // Ép kiểu any để TypeScript không báo lỗi khi lấy thuộc tính 'file' của Web
-      const rawFile = (doc as any).file;
-      const size = rawFile?.size || doc.size || 0;
+const formatDuration = (seconds = 0) => {
+  if (!seconds) return '';
 
-      let type: FileItem['type'] = 'document';
-      const mimeType = doc.mimeType?.toLowerCase() || '';
+  const totalSeconds = Math.round(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+};
 
-      if (mimeType.startsWith('image/')) type = 'image';
-      else if (mimeType.startsWith('video/')) type = 'video';
-      else if (mimeType.startsWith('audio/')) type = 'audio';
+const normalizeAsset = (asset: MediaLibrary.Asset): MediaItem => ({
+  id: asset.id,
+  asset,
+  thumbnailUri: asset.uri,
+  name: asset.filename || 'Media file',
+  type: getMediaType(asset),
+  duration: asset.duration,
+});
 
-      const typeColor = {
-        image: '#3058FF',
-        video: '#9D4DFF',
-        audio: '#4BC6D8',
-        document: '#FF9B3D',
-      };
-
-      return {
-        id: uri || `${name}-${Math.random().toString(36).slice(2)}`,
-        uri,
-        name,
-        size, 
-        type,
-        color: typeColor[type],
-        selected: true,
-        rawFile: rawFile, // Chứa data thực để WebRTC gửi đi
-      };
-    });
-  };
+const getFileSize = async (uri: string) => {
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    return info.exists ? info.size ?? 0 : 0;
+  } catch (error) {
+    console.warn('[FileSelection] Unable to read media size:', error);
+    return 0;
+  }
+};
 
 export default function FileSelectionScreen() {
   const router = useRouter();
   const { deviceName } = useLocalSearchParams();
-  const [activeTab, setActiveTab] = useState<typeof fileTabs[number]>('All');
-  const [files, setFiles] = useState<FileItem[]>([]);
+  const displayDeviceName = getDeviceName(deviceName);
   const { width } = useWindowDimensions();
-  const columnCount = 3;
-  const itemSize = Math.floor((width - 44) / columnCount);
 
-  const displayedFiles = files.filter((file) =>
-    tabFilter[activeTab].includes(file.type)
+  const [activeTab, setActiveTab] = useState<(typeof fileTabs)[number]>('All');
+  const [mediaFiles, setMediaFiles] = useState<MediaItem[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<SelectedMediaFile[]>([]);
+  const [permissionGranted, setPermissionGranted] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [endCursor, setEndCursor] = useState<string | undefined>();
+  const [resolvingAssetId, setResolvingAssetId] = useState<string | null>(null);
+
+  const columnCount = 3;
+  const itemGap = 10;
+  const horizontalPadding = 16;
+  const itemSize = Math.floor((width - horizontalPadding * 2 - itemGap * (columnCount - 1)) / columnCount);
+
+  const selectedIds = useMemo(
+    () => new Set(selectedFiles.map((file) => file.id)),
+    [selectedFiles],
   );
 
-  const selectedCount = files.filter((f) => f.selected).length;
-  const totalBytes = files
-    .filter((f) => f.selected)
-    .reduce((sum, f) => sum + f.size, 0);
-  const totalSize = formatFileSize(totalBytes);
+  const displayedFiles = useMemo(() => {
+    if (activeTab === 'Photos') {
+      return mediaFiles.filter((file) => file.type === 'image');
+    }
 
-  const pickFiles = async () => {
+    if (activeTab === 'Videos') {
+      return mediaFiles.filter((file) => file.type === 'video');
+    }
+
+    return mediaFiles;
+  }, [activeTab, mediaFiles]);
+
+  const totalBytes = useMemo(
+    () => selectedFiles.reduce((total, file) => total + file.size, 0),
+    [selectedFiles],
+  );
+  const totalSize = formatBytes(totalBytes);
+
+  const appendAssets = useCallback((assets: MediaLibrary.Asset[]) => {
+    setMediaFiles((current) => {
+      const existingIds = new Set(current.map((item) => item.id));
+      const nextItems = assets
+        .filter((asset) => !existingIds.has(asset.id))
+        .map(normalizeAsset);
+
+      return [...current, ...nextItems];
+    });
+  }, []);
+
+  const fetchMediaPage = useCallback(
+    async (after?: string) => {
+      const response = await MediaLibrary.getAssetsAsync({
+        first: PAGE_SIZE,
+        after,
+        mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+        sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+      });
+
+      appendAssets(response.assets);
+      setEndCursor(response.endCursor);
+      setHasNextPage(response.hasNextPage);
+    },
+    [appendAssets],
+  );
+
+  const requestPermissionAndLoad = useCallback(async () => {
+    setIsLoading(true);
+
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: '*/*',
-        multiple: true,
-        copyToCacheDirectory: false,
-      });
+      const permission = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
 
-      // Tương thích với cả SDK cũ và mới
-      if (result.canceled || ('type' in result && result.type === 'cancel')) {
+      if (!permission.granted) {
+        setPermissionGranted(false);
+        setMediaFiles([]);
         return;
       }
 
-      // TRUYỀN mảng assets VÀO THAY VÌ truyền toàn bộ result
-      const pickedFiles = normalizeDocuments(result.assets || []);
-      
-      if (pickedFiles.length === 0) {
-        return;
-      }
-
-      setFiles((current) => {
-        const existingUris = new Set(current.map((file) => file.uri));
-        const merged = [...current];
-
-        pickedFiles.forEach((file) => {
-          if (!existingUris.has(file.uri)) {
-            merged.push(file);
-            existingUris.add(file.uri);
-          }
-        });
-
-        return merged;
-      });
+      setPermissionGranted(true);
+      setMediaFiles([]);
+      setSelectedFiles([]);
+      setEndCursor(undefined);
+      setHasNextPage(false);
+      await fetchMediaPage();
     } catch (error) {
-      console.error(error);
-      Alert.alert('File Selection Error', 'Unable to select files. Please try again.');
+      console.error('[FileSelection] Failed to load media library:', error);
+      Alert.alert('Media Library Error', 'Unable to load photos and videos from this device.');
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, [fetchMediaPage]);
 
-  const toggleFile = (id: string) => {
-    setFiles((current) =>
-      current.map((file) =>
-        file.id === id ? { ...file, selected: !file.selected } : file
-      )
-    );
-  };
+  useEffect(() => {
+    requestPermissionAndLoad();
+  }, [requestPermissionAndLoad]);
 
-  const toggleSelectAll = () => {
-    const allSelected = files.every((file) => file.selected);
-    setFiles((current) => current.map((file) => ({ ...file, selected: !allSelected })));
-  };
+  const loadMore = useCallback(async () => {
+    if (!permissionGranted || !hasNextPage || !endCursor || isLoadingMore) {
+      return;
+    }
 
-  const handleProceed = () => {
-    if (selectedCount > 0) {
-      
-      // Lấy data file gốc của file đầu tiên được chọn
-      const firstSelectedFile = files.find((f) => f.selected)?.rawFile;
+    setIsLoadingMore(true);
+    try {
+      await fetchMediaPage(endCursor);
+    } catch (error) {
+      console.warn('[FileSelection] Unable to load more media:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [endCursor, fetchMediaPage, hasNextPage, isLoadingMore, permissionGranted]);
 
-      if (firstSelectedFile) {
-        webRTCService.pendingFile = firstSelectedFile;
+  const resolveSelectedFile = useCallback(async (item: MediaItem): Promise<SelectedMediaFile> => {
+    const assetInfo = await MediaLibrary.getAssetInfoAsync(item.asset, {
+      shouldDownloadFromNetwork: true,
+    });
+    const uri = assetInfo.localUri || assetInfo.uri || item.asset.uri;
+    const size = await getFileSize(uri);
+    const name = assetInfo.filename || item.name;
+    const type = getMediaType(assetInfo);
+
+    return {
+      id: item.id,
+      uri,
+      thumbnailUri: item.thumbnailUri,
+      name,
+      size,
+      type,
+      mimeType: getMimeType(name, type),
+      duration: assetInfo.duration,
+    };
+  }, []);
+
+  const toggleFile = useCallback(
+    async (item: MediaItem) => {
+      if (selectedIds.has(item.id)) {
+        setSelectedFiles((current) => current.filter((file) => file.id !== item.id));
+        return;
       }
 
-      // Chuyển sang màn hình Transfer như cũ
-      router.push({
-        pathname: '/transfer',
-        params: {
-          deviceName,
-          fileCount: selectedCount.toString(),
-          totalSize,
-        },
-      });
-    }
-  };
+      setResolvingAssetId(item.id);
+      try {
+        const selectedFile = await resolveSelectedFile(item);
+        setSelectedFiles((current) => {
+          if (current.some((file) => file.id === selectedFile.id)) {
+            return current;
+          }
 
-  const renderTab = (tab: typeof fileTabs[number]) => {
+          return [...current, selectedFile];
+        });
+      } catch (error) {
+        console.error('[FileSelection] Failed to prepare selected media:', error);
+        Alert.alert('Selection Error', 'Unable to prepare this media file for sending.');
+      } finally {
+        setResolvingAssetId(null);
+      }
+    },
+    [resolveSelectedFile, selectedIds],
+  );
+
+  const handleSend = useCallback(() => {
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    webRTCService.pendingFile = selectedFiles[0];
+    router.push({
+      pathname: '/transfer',
+      params: {
+        deviceName: displayDeviceName,
+        fileCount: selectedFiles.length.toString(),
+        totalSize,
+      },
+    });
+  }, [displayDeviceName, router, selectedFiles, totalSize]);
+
+  const renderTab = (tab: (typeof fileTabs)[number]) => {
     const active = tab === activeTab;
+
     return (
       <TouchableOpacity
         key={tab}
-        style={[styles.tabItem, active && styles.tabItemActive]}
+        style={[styles.tabButton, active && styles.tabButtonActive]}
         onPress={() => setActiveTab(tab)}
       >
         <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab}</Text>
@@ -217,96 +302,132 @@ export default function FileSelectionScreen() {
     );
   };
 
-  const renderFileItem = ({ item }: { item: FileItem }) => (
-    <TouchableOpacity
-      style={[styles.fileCard, { width: itemSize, height: itemSize + 30 }]}
-      activeOpacity={0.85}
-      onPress={() => toggleFile(item.id)}
-    >
-      <View style={[styles.fileThumbnail, { backgroundColor: item.color }]}>
-        <MaterialCommunityIcons
-          name={iconByType[item.type]}
-          size={28}
-          color="#FFFFFF"
-        />
-        {item.selected && (
-          <View style={styles.selectionBadge}>
-            <MaterialCommunityIcons name="check" size={14} color="#05091B" />
+  const renderMediaItem = ({ item }: { item: MediaItem }) => {
+    const isSelected = selectedIds.has(item.id);
+    const isResolving = resolvingAssetId === item.id;
+
+    return (
+      <TouchableOpacity
+        activeOpacity={0.86}
+        disabled={Boolean(resolvingAssetId)}
+        onPress={() => toggleFile(item)}
+        style={[styles.mediaCard, { width: itemSize }]}
+      >
+        <View style={[styles.thumbnailWrap, { width: itemSize, height: itemSize }]}>
+          <Image source={{ uri: item.thumbnailUri }} style={styles.thumbnail} resizeMode="cover" />
+          <View style={styles.mediaShade} />
+
+          {item.type === 'video' && (
+            <View style={styles.videoBadge}>
+              <MaterialCommunityIcons name="play" size={12} color="#FFFFFF" />
+              <Text style={styles.videoDuration}>{formatDuration(item.duration)}</Text>
+            </View>
+          )}
+
+          <View style={[styles.checkBadge, isSelected && styles.checkBadgeSelected]}>
+            {isResolving ? (
+              <ActivityIndicator size="small" color="#82F7B2" />
+            ) : (
+              <MaterialCommunityIcons
+                name={isSelected ? 'check' : 'plus'}
+                size={14}
+                color={isSelected ? '#05091B' : '#FFFFFF'}
+              />
+            )}
           </View>
-        )}
-      </View>
-      <View style={styles.fileMeta}>
-        <Text style={styles.fileTitle} numberOfLines={1}>
+        </View>
+
+        <Text style={styles.mediaName} numberOfLines={1}>
           {item.name}
         </Text>
-        <Text style={styles.fileSubtitle}>{formatFileSize(item.size)}</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderEmptyState = () => {
+    if (isLoading) {
+      return (
+        <View style={styles.emptyState}>
+          <ActivityIndicator color="#82F7B2" size="large" />
+          <Text style={styles.emptyTitle}>Loading media</Text>
+        </View>
+      );
+    }
+
+    if (!permissionGranted) {
+      return (
+        <View style={styles.emptyState}>
+          <MaterialCommunityIcons name="folder-lock-outline" size={42} color="#82F7B2" />
+          <Text style={styles.emptyTitle}>Storage access needed</Text>
+          <Text style={styles.emptySubtitle}>
+            Allow access to photos and videos so PeerDrop can show files from this phone.
+          </Text>
+          <TouchableOpacity style={styles.permissionButton} onPress={requestPermissionAndLoad}>
+            <Text style={styles.permissionButtonText}>Allow Access</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.emptyState}>
+        <MaterialCommunityIcons name="image-off-outline" size={42} color="#82F7B2" />
+        <Text style={styles.emptyTitle}>No media found</Text>
+        <Text style={styles.emptySubtitle}>Photos and videos from this device will appear here.</Text>
       </View>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <MaterialCommunityIcons name="chevron-left" size={24} color="#82F7B2" />
+          <MaterialCommunityIcons name="chevron-left" size={26} color="#82F7B2" />
         </TouchableOpacity>
-        <View style={styles.headerTexts}>
+        <View style={styles.headerTextWrap}>
           <Text style={styles.screenTitle}>Select Files</Text>
-          <Text style={styles.screenSubtitle}>Sending to {deviceName ?? 'Device'}</Text>
+          <Text style={styles.screenSubtitle}>Sending to {displayDeviceName}</Text>
         </View>
-        <TouchableOpacity onPress={toggleSelectAll} style={styles.selectAllButton}>
-          <Text style={styles.selectAllButtonText}>
-            {files.every((f) => f.selected) ? 'Deselect all' : 'Select all'}
-          </Text>
-        </TouchableOpacity>
+        <Text style={styles.counterText}>{selectedFiles.length}</Text>
       </View>
 
       <View style={styles.tabRow}>{fileTabs.map(renderTab)}</View>
 
-      <View style={styles.filePickerBar}>
-        <Text style={styles.pickerHint}>
-          Choose files from your device to send over the connection.
-        </Text>
-        <TouchableOpacity style={styles.pickButton} onPress={pickFiles}>
-          <MaterialCommunityIcons name="file-plus" size={18} color="#05091B" />
-          <Text style={styles.pickButtonText}>Choose Files</Text>
-        </TouchableOpacity>
-      </View>
-
       <FlatList
         data={displayedFiles}
-        renderItem={renderFileItem}
+        renderItem={renderMediaItem}
         keyExtractor={(item) => item.id}
         numColumns={columnCount}
         columnWrapperStyle={styles.gridRow}
         contentContainerStyle={styles.gridContent}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>No files selected yet</Text>
-            <Text style={styles.emptySubtitle}>
-              Tap Choose Files above to pick real files from your device.
-            </Text>
-          </View>
+        ListEmptyComponent={renderEmptyState}
+        ListFooterComponent={
+          isLoadingMore ? (
+            <View style={styles.listFooter}>
+              <ActivityIndicator color="#82F7B2" />
+            </View>
+          ) : null
         }
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
         showsVerticalScrollIndicator={false}
       />
 
-      <View style={styles.bottomBar}>
-        <View>
-          <Text style={styles.bottomTitle}>Selected: {selectedCount} item{selectedCount !== 1 ? 's' : ''}</Text>
-          <Text style={styles.bottomSubtitle}>
-            {selectedCount > 0 ? `${totalSize} total` : 'Choose files to start sending'}
-          </Text>
-        </View>
+      {selectedFiles.length > 0 && (
         <TouchableOpacity
-          style={[styles.sendButton, selectedCount === 0 && styles.sendButtonDisabled]}
-          disabled={selectedCount === 0}
-          onPress={handleProceed}
+          activeOpacity={0.9}
+          style={styles.fab}
+          onPress={handleSend}
         >
-          <Text style={styles.sendButtonText}>Send Now</Text>
-          <MaterialCommunityIcons name="arrow-right" size={18} color="#05091B" style={{ marginLeft: 6 }} />
+          <View>
+            <Text style={styles.fabTitle}>Send</Text>
+            <Text style={styles.fabSubtitle}>
+              {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} • {totalSize}
+            </Text>
+          </View>
+          <MaterialCommunityIcons name="send" size={22} color="#05091B" />
         </TouchableOpacity>
-      </View>
+      )}
     </View>
   );
 }
@@ -320,7 +441,6 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     marginHorizontal: 20,
     marginBottom: 18,
   },
@@ -328,11 +448,11 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 14,
-    backgroundColor: 'rgba(13, 30, 70, 0.8)',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(13, 30, 70, 0.8)',
   },
-  headerTexts: {
+  headerTextWrap: {
     flex: 1,
     marginLeft: 14,
   },
@@ -346,31 +466,33 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 4,
   },
-  selectAllButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 16,
+  counterText: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(130, 247, 178, 0.16)',
     borderWidth: 1,
-    borderColor: 'rgba(130, 247, 178, 0.35)',
-  },
-  selectAllButtonText: {
+    borderColor: 'rgba(130, 247, 178, 0.32)',
     color: '#82F7B2',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 32,
+    textAlign: 'center',
   },
   tabRow: {
     flexDirection: 'row',
+    gap: 10,
     marginHorizontal: 20,
     marginBottom: 16,
-    justifyContent: 'space-between',
   },
-  tabItem: {
+  tabButton: {
     paddingVertical: 10,
     paddingHorizontal: 16,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.05)',
   },
-  tabItemActive: {
+  tabButtonActive: {
     backgroundColor: 'rgba(130, 247, 178, 0.14)',
   },
   tabText: {
@@ -381,138 +503,134 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: '#82F7B2',
   },
-  filePickerBar: {
-    marginHorizontal: 20,
-    marginBottom: 18,
-    padding: 16,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  pickerHint: {
-    color: '#A6B6E8',
-    fontSize: 13,
-    marginBottom: 12,
-    lineHeight: 20,
-  },
-  pickButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: '#82F7B2',
-  },
-  pickButtonText: {
-    marginLeft: 8,
-    color: '#05091B',
-    fontWeight: '700',
-    fontSize: 14,
-  },
   gridContent: {
-    paddingHorizontal: 12,
-    paddingBottom: 150,
+    flexGrow: 1,
+    paddingHorizontal: 16,
+    paddingBottom: 120,
   },
   gridRow: {
     justifyContent: 'space-between',
     marginBottom: 14,
   },
-  fileCard: {
-    borderRadius: 20,
+  mediaCard: {
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
   },
-  fileThumbnail: {
-    flex: 1,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
+  thumbnailWrap: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#0C1634',
   },
-  selectionBadge: {
+  thumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  mediaShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5, 9, 27, 0.08)',
+  },
+  videoBadge: {
     position: 'absolute',
-    top: 10,
-    right: 10,
+    left: 7,
+    bottom: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(5, 9, 27, 0.72)',
+  },
+  videoDuration: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 2,
+  },
+  checkBadge: {
+    position: 'absolute',
+    top: 7,
+    right: 7,
     width: 26,
     height: 26,
-    borderRadius: 14,
-    backgroundColor: '#82F7B2',
+    borderRadius: 13,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: 'rgba(5, 9, 27, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.36)',
   },
-  fileMeta: {
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    alignItems: 'center',
+  checkBadgeSelected: {
+    backgroundColor: '#82F7B2',
+    borderColor: '#82F7B2',
   },
-  fileTitle: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  fileSubtitle: {
-    color: '#9DB1F1',
+  mediaName: {
+    color: '#DDE6FF',
     fontSize: 11,
-    marginTop: 4,
+    fontWeight: '600',
+    marginTop: 7,
   },
   emptyState: {
-    marginTop: 40,
-    paddingHorizontal: 24,
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 26,
+    paddingTop: 80,
   },
   emptyTitle: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
-    marginBottom: 8,
+    marginTop: 14,
+    textAlign: 'center',
   },
   emptySubtitle: {
     color: '#9DB1F1',
     fontSize: 13,
-    textAlign: 'center',
     lineHeight: 20,
+    textAlign: 'center',
+    marginTop: 8,
   },
-  bottomBar: {
+  permissionButton: {
+    marginTop: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 8,
+    backgroundColor: '#82F7B2',
+  },
+  permissionButtonText: {
+    color: '#05091B',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  listFooter: {
+    paddingVertical: 18,
+  },
+  fab: {
     position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 20,
+    left: 18,
+    right: 18,
+    bottom: 22,
+    minHeight: 64,
+    borderRadius: 8,
+    paddingHorizontal: 18,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
-    borderRadius: 22,
-    backgroundColor: 'rgba(8, 18, 50, 0.95)',
-    borderWidth: 1,
-    borderColor: 'rgba(130, 247, 178, 0.16)',
-  },
-  bottomTitle: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  bottomSubtitle: {
-    color: '#83E8B9',
-    fontSize: 11,
-    marginTop: 4,
-  },
-  sendButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 18,
     backgroundColor: '#82F7B2',
+    shadowColor: '#82F7B2',
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
   },
-  sendButtonDisabled: {
-    backgroundColor: 'rgba(130, 247, 178, 0.4)',
-  },
-  sendButtonText: {
+  fabTitle: {
     color: '#05091B',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  fabSubtitle: {
+    color: 'rgba(5, 9, 27, 0.72)',
+    fontSize: 12,
     fontWeight: '700',
-    fontSize: 14,
+    marginTop: 3,
   },
 });
