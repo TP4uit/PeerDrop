@@ -1,18 +1,17 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
   FlatList,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { loadTransferHistory } from '@/utils/transferHistory';
 import { socketService } from '../services/socket.service';
-import { webRTCService } from '../services/webrtc.service';
 
 interface RecentTransfer {
   id: string;
@@ -26,28 +25,25 @@ interface RecentTransfer {
 export default function HomeScreen() {
   const router = useRouter();
   const [recentTransfers, setRecentTransfers] = useState<RecentTransfer[]>([]);
-  const [nickname, setNickname] = useState<string>('Đang tải...');
+  const [nickname, setNickname] = useState<string>('Dang tai...');
 
-  
-useEffect(() => {
-    const setupConnection = async () => {
-      await socketService.connect();
-      setNickname(socketService.nickname);
-      /* socketService.socket?.emit('join-room', {
-        roomId: socketService.deviceId,
-        userInfo: {
-          nickname: socketService.nickname,
-          avatar: socketService.avatar
-        }
-      }); */
+  useEffect(() => {
+    let active = true;
 
-      webRTCService.initSignalListener(); // Bắt đầu lắng nghe tín hiệu WebRTC ngay khi kết nối socket thành công
+    const loadIdentity = async () => {
+      await socketService.initializeIdentity();
+
+      if (active) {
+        setNickname(socketService.nickname);
+      }
     };
 
-    setupConnection();
+    loadIdentity().catch((error) => {
+      console.error('[Home] Failed to initialize identity:', error);
+    });
 
     return () => {
-      /*socketService.disconnect(); */
+      active = false;
     };
   }, []);
 
@@ -67,7 +63,7 @@ useEffect(() => {
       return () => {
         active = false;
       };
-    }, [])
+    }, []),
   );
 
   const renderActionCard = (
@@ -75,7 +71,7 @@ useEffect(() => {
     label: string,
     subtitle: string,
     onPress: () => void,
-    color: string
+    color: string,
   ) => (
     <TouchableOpacity
       style={[styles.actionCard, { borderColor: color }]}
@@ -111,7 +107,7 @@ useEffect(() => {
   return (
     <ScrollView style={styles.wrapper} showsVerticalScrollIndicator={false}>
       <View style={styles.container}>
-        <View style={styles.cardTop}> 
+        <View style={styles.cardTop}>
           <View style={styles.profileRow}>
             <View style={styles.avatarWrapper}>
               <MaterialCommunityIcons name="account-circle" size={46} color="#FFFFFF" />
@@ -130,7 +126,7 @@ useEffect(() => {
 
           <View style={styles.actionRow}>
             {renderActionCard('upload', 'Send', 'Share files now', () => router.push('/radar'), '#4CAF50')}
-          {renderActionCard('download', 'Receive', 'Wait for incoming', () => router.push('/receive'), '#2196F3')}
+            {renderActionCard('download', 'Receive', 'Wait for incoming', () => router.push('/receive'), '#2196F3')}
           </View>
         </View>
 

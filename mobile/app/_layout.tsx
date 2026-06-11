@@ -31,12 +31,10 @@ export default function RootLayout() {
   const [incomingOffer, setIncomingOffer] = useState<IncomingOffer | null>(null);
 
   useEffect(() => {
-    let active = true;
     let currentSocket:
       | {
           on: (event: string, handler: (payload: IncomingOffer) => void) => void;
           off: (event: string, handler?: (payload: IncomingOffer) => void) => void;
-          emit: (event: string, payload?: Record<string, unknown>) => void;
         }
       | null = null;
 
@@ -45,31 +43,34 @@ export default function RootLayout() {
         return;
       }
 
-      if (!active) {
-        return;
-      }
-
       setIncomingOffer(payload);
     };
 
-    const setupSocket = async () => {
-      const socket = await socketService.connect();
-      if (!active) {
+    const attachToSocket = (
+      nextSocket: {
+        on: (event: string, handler: (payload: IncomingOffer) => void) => void;
+        off: (event: string, handler?: (payload: IncomingOffer) => void) => void;
+      } | null,
+    ) => {
+      if (currentSocket) {
+        currentSocket.off('webrtc-signal', handleSignal);
+      }
+
+      currentSocket = nextSocket;
+
+      if (!currentSocket) {
+        setIncomingOffer(null);
         return;
       }
 
-      webRTCService.initSignalListener();
-      currentSocket = socket;
       currentSocket.on('webrtc-signal', handleSignal);
     };
 
-    setupSocket().catch((error) => {
-      console.error('[RootLayout] Failed to initialize socket overlay:', error);
-    });
+    const unsubscribe = socketService.subscribeSocket(attachToSocket);
 
     return () => {
-      active = false;
       currentSocket?.off('webrtc-signal', handleSignal);
+      unsubscribe();
     };
   }, []);
 
@@ -164,15 +165,15 @@ export default function RootLayout() {
             </View>
             <Text style={styles.modalTitle}>Incoming Transfer</Text>
             <Text style={styles.modalMessage}>
-              Thiết bị {incomingOffer?.fromName || incomingOffer?.fromId} muốn gửi tệp cho bạn. Bạn có chấp nhận không?
+              Thiet bi {incomingOffer?.fromName || incomingOffer?.fromId} muon gui tep cho ban. Ban co chap nhan khong?
             </Text>
 
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.rejectButton} onPress={handleRejectTransfer}>
-                <Text style={styles.rejectButtonText}>Từ chối</Text>
+                <Text style={styles.rejectButtonText}>Tu choi</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.acceptButton} onPress={handleAcceptTransfer}>
-                <Text style={styles.acceptButtonText}>Chấp nhận</Text>
+                <Text style={styles.acceptButtonText}>Chap nhan</Text>
               </TouchableOpacity>
             </View>
           </View>

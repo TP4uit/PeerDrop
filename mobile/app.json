@@ -20,6 +20,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
+      "usesCleartextTraffic": true,
       "package": "com.anonymous.mobile"
     },
     "web": {
@@ -39,11 +40,25 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow PeerDrop to access your photos and videos for file sharing.",
+          "savePhotosPermission": "Allow PeerDrop to save received media to your library.",
+          "granularPermissions": [
+            "photo",
+            "video"
+          ]
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "signalingUrl": "http://10.0.2.2:3000"
     }
   }
 }

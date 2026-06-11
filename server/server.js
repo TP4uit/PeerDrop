@@ -12,6 +12,9 @@ const server = http.createServer(app);
 // Cấu hình Socket.io với CORS
 // Trong môi trường dev có thể mở '*', khi lên production cần giới hạn origin
 const io = new Server(server, {
+    pingInterval: 10000,
+    pingTimeout: 60000,
+    connectTimeout: 45000,
     cors: {
         origin: '*',
         methods: ['GET', 'POST']

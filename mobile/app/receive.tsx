@@ -1,16 +1,16 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  useWindowDimensions,
   Animated,
   Easing,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { socketService } from '@/services/socket.service';
+import { socketService, type ConnectionState } from '@/services/socket.service';
 import { webRTCService } from '@/services/webrtc.service';
 import { addTransferHistoryItem } from '@/utils/transferHistory';
 
@@ -26,21 +26,28 @@ const RadarWave = ({ delay }: { delay: number }) => {
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const start = () => {
+    let loop: Animated.CompositeAnimation | null = null;
+
+    const timer = setTimeout(() => {
       anim.setValue(0);
 
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: 5000,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      }).start(() => start());
+      loop = Animated.loop(
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 5000,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      );
+      loop.start();
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+      loop?.stop();
+      anim.stopAnimation();
     };
-
-    const timer = setTimeout(start, delay);
-
-    return () => clearTimeout(timer);
-  }, []);
+  }, [anim, delay]);
 
   const scale = anim.interpolate({
     inputRange: [0, 1],
@@ -65,70 +72,253 @@ const RadarWave = ({ delay }: { delay: number }) => {
     />
   );
 };
+
 export default function ReceiveScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const radarSize = Math.min(width - 40, 340);
   const [stage, setStage] = useState<'waiting' | 'success' | 'connected'>('waiting');
+  const [serverState, setServerState] = useState<'connecting' | 'ready' | 'reconnecting' | 'offline'>('connecting');
+  const [serverError, setServerError] = useState<string | null>(null);
   const [senderName, setSenderName] = useState<string>('');
+  const [retryToken, setRetryToken] = useState(0);
   const senderNameRef = useRef('');
 
   useEffect(() => {
-    // 📍 VIỆC 2 CỦA PHÚC: Mở cửa phát sóng khi vừa vào màn hình
-    socketService.socket?.emit('join-room', {
-      roomId: socketService.deviceId,
-      userInfo: { nickname: socketService.nickname, avatar: socketService.avatar }
-    });
+    let active = true;
+    let currentSocket: Awaited<ReturnType<typeof socketService.connect>> | null = null;
+    let unsubscribeConnectionState: (() => void) | null = null;
+    let roomJoinTimeout: ReturnType<typeof setTimeout> | null = null;
+    let resolveRoomJoin: (() => void) | null = null;
+    let rejectRoomJoin: ((error: Error) => void) | null = null;
 
-    // Bật công tắc lắng nghe WebRTC
-    webRTCService.initSignalListener();
+    const clearRoomJoinWait = () => {
+      if (roomJoinTimeout) {
+        clearTimeout(roomJoinTimeout);
+      }
 
-    // 📍 VIỆC 4 CỦA PHÚC: Đăng ký hàm callback lắng nghe đường ống P2P thông xe
-    // Khi kết nối thành công, Phúc sẽ gọi hàm callback này từ Service ngầm
-    webRTCService.onConnected = (remoteDeviceName: string) => {
-      senderNameRef.current = remoteDeviceName;
-      setSenderName(remoteDeviceName); // Cập nhật tên máy gửi thật
-      
-      // Bật Pop-up thành công (stage = 'success')
-      setStage('success');
-
-      // Tự động tắt Pop-up sau 2 giây và chuyển sang trạng thái chờ nhận file
-      setTimeout(() => {
-        setStage('connected');
-      }, 2000);
+      roomJoinTimeout = null;
+      resolveRoomJoin = null;
+      rejectRoomJoin = null;
     };
 
-    webRTCService.onComplete = async (fileInfo?: any) => {
-      await addTransferHistoryItem({
-        id: `${Date.now()}`,
-        fileName: fileInfo?.name || 'Received file',
-        device: senderNameRef.current || 'Unknown Device',
-        date: new Date().toLocaleString(),
-        size: formatFileSize(fileInfo?.size || 0),
-        status: 'completed',
+    const markRoomReady = () => {
+      if (!active) {
+        return;
+      }
+
+      setServerState('ready');
+      setServerError(null);
+      webRTCService.initSignalListener();
+    };
+
+    const handleRoomJoined = () => {
+      const resolve = resolveRoomJoin;
+      clearRoomJoinWait();
+      markRoomReady();
+      resolve?.();
+    };
+
+    const handleRoomError = (payload?: { message?: string }) => {
+      const error = new Error(payload?.message || 'Unable to join receive room.');
+      const reject = rejectRoomJoin;
+      clearRoomJoinWait();
+
+      if (active) {
+        setServerState('offline');
+        setServerError(error.message);
+      }
+
+      reject?.(error);
+    };
+
+    const waitForRoomJoin = () =>
+      new Promise<void>((resolve, reject) => {
+        resolveRoomJoin = resolve;
+        rejectRoomJoin = reject;
+        roomJoinTimeout = setTimeout(() => {
+          const error = new Error('Timed out joining receive room.');
+          clearRoomJoinWait();
+          reject(error);
+        }, 5000);
       });
+
+    const handleConnectionState = (state: ConnectionState, reason?: string) => {
+      if (!active) {
+        return;
+      }
+
+      if (state === 'reconnecting') {
+        setServerState('reconnecting');
+        setServerError(null);
+        return;
+      }
+
+      if (state === 'connected') {
+        setServerError(null);
+        setServerState((current) =>
+          current === 'reconnecting' || current === 'offline' ? 'connecting' : current,
+        );
+        return;
+      }
+
+      if (state === 'offline') {
+        setServerState('offline');
+        setServerError(
+          reason || 'Unable to reach the signaling server. Start the backend and try again.',
+        );
+      }
     };
+
+    const configureWebRTCCallbacks = () => {
+      webRTCService.onConnected = (remoteDeviceName: string) => {
+        senderNameRef.current = remoteDeviceName;
+        setSenderName(remoteDeviceName);
+        setStage('success');
+
+        setTimeout(() => {
+          if (active) {
+            setStage('connected');
+          }
+        }, 2000);
+      };
+
+      webRTCService.onComplete = async (fileInfo?: any) => {
+        await addTransferHistoryItem({
+          id: `${Date.now()}`,
+          fileName: fileInfo?.name || 'Received file',
+          device: senderNameRef.current || 'Unknown Device',
+          date: new Date().toLocaleString(),
+          size: formatFileSize(fileInfo?.size || 0),
+          status: 'completed',
+        });
+      };
+    };
+
+    const connectForReceive = async () => {
+      setServerState('connecting');
+      setServerError(null);
+      setStage('waiting');
+
+      try {
+        const socket = await socketService.connect();
+        if (!active) {
+          return;
+        }
+
+        currentSocket = socket;
+        currentSocket.on('room-joined', handleRoomJoined);
+        currentSocket.on('room-error', handleRoomError);
+        unsubscribeConnectionState = socketService.subscribeConnectionState(handleConnectionState);
+        configureWebRTCCallbacks();
+
+        const roomJoinPromise = waitForRoomJoin();
+        socketService.joinRoom(socketService.deviceId);
+        await roomJoinPromise;
+        if (!active) {
+          return;
+        }
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        console.error('[Receive] Failed to connect to signaling server:', error);
+        setServerState('offline');
+        setServerError('Unable to reach the signaling server. Start the backend and try again.');
+      }
+    };
+
+    connectForReceive();
 
     return () => {
-      // Rời khỏi phòng và tắt lắng nghe khi user thoát khỏi màn hình Receive
-      socketService.socket?.emit('leave-room');
-      if (webRTCService.onConnected) webRTCService.onConnected = null; // Clean up listener
-      if (webRTCService.onComplete) webRTCService.onComplete = null;
+      active = false;
+      clearRoomJoinWait();
+      unsubscribeConnectionState?.();
+      currentSocket?.off('room-joined', handleRoomJoined);
+      currentSocket?.off('room-error', handleRoomError);
+      socketService.leaveRoom();
+      webRTCService.onConnected = null;
+      webRTCService.onComplete = null;
     };
-  }, []);
+  }, [retryToken]);
 
-  /*useEffect(() => {
-    const successTimer = setTimeout(() => setStage('success'), 2200);
-    const connectedTimer = setTimeout(() => setStage('connected'), 3600);
-
-    return () => {
-      clearTimeout(successTimer);
-      clearTimeout(connectedTimer);
-    };
-  }, []); */
-
-  const isWaiting = stage === 'waiting';
+  const isWaiting = serverState === 'ready' && stage === 'waiting';
   const isConnected = stage === 'connected';
+
+  const renderStatusBlock = () => {
+    if (serverState === 'connecting') {
+      return (
+        <View style={styles.statusBlock}>
+          <Text style={styles.statusTitle}>Connecting to server...</Text>
+          <Text style={styles.statusSubtitle}>
+            PeerDrop is preparing receive mode and checking the signaling server.
+          </Text>
+        </View>
+      );
+    }
+
+    if (serverState === 'reconnecting') {
+      return (
+        <View style={styles.statusBlock}>
+          <Text style={styles.statusTitle}>Reconnecting...</Text>
+          <Text style={styles.statusSubtitle}>
+            The signaling connection dropped briefly. PeerDrop will restore receive mode automatically.
+          </Text>
+        </View>
+      );
+    }
+
+    if (serverState === 'offline') {
+      return (
+        <View style={styles.statusBlock}>
+          <Text style={styles.statusTitle}>Server unavailable</Text>
+          <Text style={styles.statusSubtitle}>{serverError}</Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => setRetryToken((value) => value + 1)}
+          >
+            <Text style={styles.retryButtonText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (isWaiting) {
+      return (
+        <View style={styles.statusBlock}>
+          <Text style={styles.statusTitle}>Waiting for connection...</Text>
+          <View style={styles.dotRow}>
+            <View style={styles.pulseDot} />
+            <View style={[styles.pulseDot, styles.pulseDotDelay]} />
+            <View style={[styles.pulseDot, styles.pulseDotDelayMore]} />
+          </View>
+        </View>
+      );
+    }
+
+    if (isConnected) {
+      return (
+        <View style={styles.connectedCard}>
+          <View style={styles.connectedAvatar}>
+            <MaterialCommunityIcons name="android" size={32} color="#05091B" />
+          </View>
+          <Text style={styles.connectedName}>{senderName}</Text>
+          <Text style={styles.connectedStatus}>Secure Connection Established</Text>
+          <Text style={styles.connectedHint}>Waiting for files...</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.statusBlock}>
+        <Text style={styles.statusTitle}>Connection Successful</Text>
+        <Text style={styles.statusSubtitle}>
+          You are securely connected to {senderName}.
+        </Text>
+      </View>
+    );
+  };
 
   return (
     <View style={styles.screen}>
@@ -143,67 +333,35 @@ export default function ReceiveScreen() {
       <View style={styles.body}>
         <Text style={styles.mainTitle}>Ready to Receive</Text>
         <Text style={styles.subtitle}>
-          Your device is currently visible to nearby users as {socketService.nickname || "Unknown Device"}
+          Your device is currently visible to nearby users as {socketService.nickname || 'Unknown Device'}
         </Text>
 
         <View
-            style={[
-                styles.radarContainer,
-                {
-                width: radarSize,
-                height: radarSize,
-                },
-            ]}
-            >
-            {Array.from({ length: 5 }).map((_, index) => (
-                <RadarWave
-                key={index}
-                delay={index * 1000}
-                />
-            ))}
+          style={[
+            styles.radarContainer,
+            {
+              width: radarSize,
+              height: radarSize,
+            },
+          ]}
+        >
+          {Array.from({ length: 5 }).map((_, index) => (
+            <RadarWave key={index} delay={index * 1000} />
+          ))}
 
-            <View style={styles.centerGlow} />
+          <View style={styles.centerGlow} />
 
-            <View style={styles.centerCircle}>
-                <View style={styles.centerIcon}>
-                <MaterialCommunityIcons
-                    name="cellphone"
-                    size={40}
-                    color="#8AF7B5"
-                />
-                </View>
+          <View style={styles.centerCircle}>
+            <View style={styles.centerIcon}>
+              <MaterialCommunityIcons name="cellphone" size={40} color="#8AF7B5" />
             </View>
+          </View>
         </View>
 
-        {isWaiting ? (
-          <View style={styles.statusBlock}>
-            <Text style={styles.statusTitle}>Waiting for connection...</Text>
-            <View style={styles.dotRow}>
-              <View style={styles.pulseDot} />
-              <View style={[styles.pulseDot, styles.pulseDotDelay]} />
-              <View style={[styles.pulseDot, styles.pulseDotDelayMore]} />
-            </View>
-          </View>
-        ) : isConnected ? (
-          <View style={styles.connectedCard}>
-            <View style={styles.connectedAvatar}>
-              <MaterialCommunityIcons name="android" size={32} color="#05091B" />
-            </View>
-            <Text style={styles.connectedName}>{senderName}</Text>
-            <Text style={styles.connectedStatus}>Secure Connection Established</Text>
-            <Text style={styles.connectedHint}>Waiting for files...</Text>
-          </View>
-        ) : (
-          <View style={styles.statusBlock}>
-            <Text style={styles.statusTitle}>Connection Successful</Text>
-            <Text style={styles.statusSubtitle}>
-              You are securely connected to {senderName}.
-            </Text>
-          </View>
-        )}
+        {renderStatusBlock()}
       </View>
 
-      {stage === 'success' && (
+      {stage === 'success' && serverState === 'ready' && (
         <View style={styles.successOverlay}>
           <View style={styles.successCard}>
             <View style={styles.successIconBox}>
@@ -283,36 +441,32 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1.5,
     borderColor: 'rgba(0,225,155,0.35)',
-    },
-
-    centerGlow: {
+  },
+  centerGlow: {
     position: 'absolute',
     width: 140,
     height: 140,
     borderRadius: 999,
     backgroundColor: 'rgba(0,225,155,0.08)',
-    },
+  },
   centerCircle: {
     width: 112,
     height: 112,
     borderRadius: 56,
     justifyContent: 'center',
     alignItems: 'center',
-
     borderWidth: 1,
     borderColor: 'rgba(0,225,155,0.25)',
-
     backgroundColor: 'rgba(7,24,57,0.98)',
-
     shadowColor: '#00E19B',
     shadowOffset: {
-        width: 0,
-        height: 0,
+      width: 0,
+      height: 0,
     },
     shadowOpacity: 0.4,
     shadowRadius: 20,
     elevation: 10,
-    },
+  },
   centerIcon: {
     width: 72,
     height: 72,
@@ -322,14 +476,21 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 255, 153, 0.18)',
   },
   statusBlock: {
+    width: '100%',
     alignItems: 'center',
     paddingHorizontal: 16,
+    paddingVertical: 20,
+    borderRadius: 24,
+    backgroundColor: 'rgba(7, 17, 44, 0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   statusTitle: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
     marginBottom: 8,
+    textAlign: 'center',
   },
   statusSubtitle: {
     color: '#A5B0D0',
@@ -337,6 +498,20 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
     maxWidth: 300,
+  },
+  retryButton: {
+    marginTop: 16,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#82F7B2',
+  },
+  retryButtonText: {
+    color: '#05091B',
+    fontSize: 14,
+    fontWeight: '800',
   },
   dotRow: {
     flexDirection: 'row',

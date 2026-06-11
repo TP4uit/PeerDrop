@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { socketService } from '../services/socket.service';
+import { socketService, type ConnectionState } from '../services/socket.service';
 import { webRTCService } from '../services/webrtc.service';
 
 interface AppDevice {
@@ -62,22 +62,27 @@ const RadarWave = ({ delay }: { delay: number }) => {
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const start = () => {
+    let loop: Animated.CompositeAnimation | null = null;
+
+    const timer = setTimeout(() => {
       anim.setValue(0);
 
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: 5000,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      }).start(() => {
-        start();
-      });
+      loop = Animated.loop(
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 5000,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      );
+      loop.start();
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+      loop?.stop();
+      anim.stopAnimation();
     };
-
-    const timer = setTimeout(start, delay);
-
-    return () => clearTimeout(timer);
   }, [anim, delay]);
 
   const scale = anim.interpolate({
@@ -114,27 +119,107 @@ export default function RadarScreen() {
 
   const [discoveredDevices, setDiscoveredDevices] = useState<AppDevice[]>([]);
   const [selectedSocketId, setSelectedSocketId] = useState<string | null>(null);
+  const [isConnecting, setIsConnecting] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [hasScanned, setHasScanned] = useState(false);
+  const [socketState, setSocketState] = useState<ConnectionState>(socketService.connectionState);
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
-    const socket = socketService.socket;
+    let active = true;
+    let currentSocket:
+      | {
+          on: (event: string, handler: (data: AppDevice[]) => void) => void;
+          off: (event: string, handler?: (data: AppDevice[]) => void) => void;
+          emit: (event: string, payload?: unknown) => void;
+          connected?: boolean;
+        }
+      | null = null;
+    let scanInterval: ReturnType<typeof setInterval> | null = null;
+    let unsubscribeConnectionState: (() => void) | null = null;
+
+    const emitRadarScan = () => {
+      if (currentSocket?.connected) {
+        currentSocket.emit('radar-scan');
+      }
+    };
 
     const handleRadarResult = (data: AppDevice[]) => {
       const devices = Array.isArray(data) ? data : [];
+      setHasScanned(true);
       setDiscoveredDevices(devices);
     };
 
-    socket?.on('radar-result', handleRadarResult);
-    socket?.emit('radar-scan');
+    const handleConnectionState = (state: ConnectionState) => {
+      if (!active) {
+        return;
+      }
 
-    const scanInterval = setInterval(() => {
-      socketService.socket?.emit('radar-scan');
-    }, 2000);
+      setSocketState(state);
+
+      if (state === 'connected') {
+        setConnectionError(null);
+        emitRadarScan();
+      }
+
+      if (state === 'reconnecting') {
+        setConnectionError(null);
+        setDiscoveredDevices([]);
+        setHasScanned(false);
+      }
+
+      if (state === 'offline') {
+        setConnectionError('Unable to reach the signaling server. Start the backend and try again.');
+      }
+    };
+
+    const connectAndScan = async () => {
+      setIsConnecting(true);
+      setConnectionError(null);
+      setDiscoveredDevices([]);
+      setHasScanned(false);
+      setSocketState(socketService.connectionState);
+
+      try {
+        const socket = await socketService.connect();
+        if (!active) {
+          return;
+        }
+
+        webRTCService.initSignalListener();
+        currentSocket = socket;
+        currentSocket.on('radar-result', handleRadarResult);
+        unsubscribeConnectionState = socketService.subscribeConnectionState(handleConnectionState);
+        emitRadarScan();
+        scanInterval = setInterval(() => {
+          emitRadarScan();
+        }, 2000);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        console.error('[Radar] Failed to connect to signaling server:', error);
+        setSocketState('offline');
+        setConnectionError('Unable to reach the signaling server. Start the backend and try again.');
+      } finally {
+        if (active) {
+          setIsConnecting(false);
+        }
+      }
+    };
+
+    connectAndScan();
 
     return () => {
-      clearInterval(scanInterval);
-      socket?.off('radar-result', handleRadarResult);
+      active = false;
+      if (scanInterval) {
+        clearInterval(scanInterval);
+      }
+      unsubscribeConnectionState?.();
+      currentSocket?.off('radar-result', handleRadarResult);
     };
-  }, []);
+  }, [retryToken]);
 
   const handleDevicePress = (device: AppDevice) => {
     if (!device.socketId) {
@@ -152,6 +237,69 @@ export default function RadarScreen() {
         deviceName: getDeviceName(device),
       },
     });
+  };
+
+  const renderStatusCard = () => {
+    if (socketState === 'reconnecting') {
+      return (
+        <View style={styles.statusCard}>
+          <Text style={styles.statusTitle}>Reconnecting...</Text>
+          <Text style={styles.statusSubtitle}>
+            The signaling connection dropped briefly. PeerDrop will resume scanning automatically.
+          </Text>
+        </View>
+      );
+    }
+
+    if (connectionError) {
+      return (
+        <View style={styles.statusCard}>
+          <Text style={styles.statusTitle}>Server unavailable</Text>
+          <Text style={styles.statusSubtitle}>{connectionError}</Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => setRetryToken((value) => value + 1)}
+          >
+            <Text style={styles.retryButtonText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (isConnecting) {
+      return (
+        <View style={styles.statusCard}>
+          <Text style={styles.statusTitle}>Connecting to server...</Text>
+          <Text style={styles.statusSubtitle}>
+            PeerDrop is checking whether the signaling server is available.
+          </Text>
+        </View>
+      );
+    }
+
+    if (!hasScanned) {
+      return (
+        <View style={styles.statusCard}>
+          <Text style={styles.statusTitle}>Scanning nearby devices...</Text>
+          <Text style={styles.statusSubtitle}>
+            PeerDrop is asking the signaling server for available receivers.
+          </Text>
+        </View>
+      );
+    }
+
+    if (discoveredDevices.length === 0) {
+      return (
+        <View style={styles.statusCard}>
+          <Text style={styles.statusTitle}>No nearby devices yet</Text>
+          <Text style={styles.statusSubtitle}>
+            Devices in receive mode will appear here as soon as they are available.
+          </Text>
+        </View>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -226,6 +374,8 @@ export default function RadarScreen() {
             );
           })}
         </View>
+
+        {renderStatusCard()}
       </View>
 
       <View style={styles.qrActions}>
@@ -364,6 +514,42 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     textAlign: 'center',
+  },
+  statusCard: {
+    width: '100%',
+    borderRadius: 20,
+    padding: 18,
+    backgroundColor: 'rgba(7, 17, 44, 0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  statusTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  statusSubtitle: {
+    color: '#A5B0D0',
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  retryButton: {
+    alignSelf: 'center',
+    marginTop: 16,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#82F7B2',
+  },
+  retryButtonText: {
+    color: '#05091B',
+    fontSize: 14,
+    fontWeight: '800',
   },
   qrActions: {
     width: '100%',
