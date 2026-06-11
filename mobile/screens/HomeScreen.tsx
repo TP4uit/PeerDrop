@@ -10,32 +10,38 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { loadTransferHistory } from '@/utils/transferHistory';
+import { loadTransferHistory, TransferHistoryItem } from '@/utils/transferHistory';
 import { socketService } from '../services/socket.service';
 
-interface RecentTransfer {
+
+/*interface RecentTransfer {
   id: string;
   fileName: string;
   device: string;
   date: string;
   size: string;
   status: 'completed' | 'failed' | 'pending';
-}
+} */
 
 export default function HomeScreen() {
   const router = useRouter();
   const [recentTransfers, setRecentTransfers] = useState<RecentTransfer[]>([]);
-  const [nickname, setNickname] = useState<string>('Dang tai...');
+  const [nickname, setNickname] = useState<string>('Đang tải...');
 
-  useEffect(() => {
-    let active = true;
+  
+useEffect(() => {
+    const setupConnection = async () => {
+      await socketService.connect();
+      setNickname(socketService.nickname);
+      /* socketService.socket?.emit('join-room', {
+        roomId: socketService.deviceId,
+        userInfo: {
+          nickname: socketService.nickname,
+          avatar: socketService.avatar
+        }
+      }); */
 
-    const loadIdentity = async () => {
-      await socketService.initializeIdentity();
-
-      if (active) {
-        setNickname(socketService.nickname);
-      }
+      webRTCService.initSignalListener(); // Bắt đầu lắng nghe tín hiệu WebRTC ngay khi kết nối socket thành công
     };
 
     loadIdentity().catch((error) => {
@@ -86,7 +92,7 @@ export default function HomeScreen() {
     </TouchableOpacity>
   );
 
-  const renderTransferItem = ({ item }: { item: RecentTransfer }) => (
+  const renderTransferItem = ({ item }: { item: TransferHistoryItem }) => (
     <View style={styles.transferRow}>
       <View style={styles.transferRowLeft}>
         <View style={styles.transferIconBox}>

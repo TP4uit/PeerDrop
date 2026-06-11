@@ -6,6 +6,7 @@ import {
   RTCSessionDescription,
 } from 'react-native-webrtc';
 import { socketService } from './socket.service';
+import { addTransferHistoryItem } from '@/utils/transferHistory';
 
 type PeerDropFile = {
   uri: string;
@@ -473,6 +474,19 @@ class WebRTCService {
     }
 
     this.onProgress?.(100, this.incomingFileInfo.size, this.incomingFileInfo.size);
+
+    //  Ghi nhận lịch sử cho máy NHẬN
+    const now = new Date();
+    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    await addTransferHistoryItem({
+      id: `tx-rx-${Date.now()}`,
+      fileName: this.incomingFileInfo.name,
+      device: this.remoteNickname, 
+      date: `Hôm nay, ${timeString}`,
+      size: formatBytes(this.incomingFileInfo.size),
+      status: 'completed',
+    });
+
     this.onComplete?.(completed);
     this.resetReceiveState();
   }
@@ -518,6 +532,18 @@ class WebRTCService {
       offset += bytesToRead;
       this.reportSendProgress(offset, metadata.size);
     }
+
+    // Ghi nhận lịch sử cho máy GỬI khi gửi kết thúc thành công
+    const now = new Date();
+    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    await addTransferHistoryItem({
+      id: `tx-sx-${Date.now()}`,
+      fileName: metadata.name,
+      device: this.remoteNickname, 
+      date: `Hôm nay, ${timeString}`,
+      size: formatBytes(metadata.size),
+      status: 'completed',
+    });
 
     this.onComplete?.(metadata);
   }
@@ -617,6 +643,15 @@ class WebRTCService {
     this.resetReceiveState();
     this.targetSocketId = null;
   }
+}
+
+// Hàm hỗ trợ đổi số bytes sang định dạng KB/MB hiển thị lên UI cho đẹp
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 export const webRTCService = new WebRTCService();
