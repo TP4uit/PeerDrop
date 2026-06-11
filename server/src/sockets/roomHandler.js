@@ -16,7 +16,7 @@ module.exports = (io, socket, rooms) => {
             rooms.set(roomId, {
                 status: 'idle',
                 members: new Map(),
-                cleanupTimer: null
+                cleanupTimers: new Map()
             });
         }
 
@@ -24,6 +24,36 @@ module.exports = (io, socket, rooms) => {
     };
 
     const clearRoomCleanup = (room) => {
+        if (room.cleanupTimer) {
+            clearTimeout(room.cleanupTimer);
+            room.cleanupTimer = null;
+        }
+
+        if (!room.cleanupTimers) {
+            room.cleanupTimers = new Map();
+            return;
+        }
+
+        for (const timer of room.cleanupTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        room.cleanupTimers.clear();
+    };
+
+    const clearMemberCleanup = (room, socketId) => {
+        if (!room.cleanupTimers) {
+            room.cleanupTimers = new Map();
+            return;
+        }
+
+        const timer = room.cleanupTimers.get(socketId);
+
+        if (timer) {
+            clearTimeout(timer);
+            room.cleanupTimers.delete(socketId);
+        }
+
         if (room.cleanupTimer) {
             clearTimeout(room.cleanupTimer);
             room.cleanupTimer = null;
@@ -55,6 +85,7 @@ module.exports = (io, socket, rooms) => {
             return null;
         }
 
+        clearMemberCleanup(room, socket.id);
         room.members.delete(socket.id);
         socket.leave(targetRoomId);
 
@@ -93,8 +124,8 @@ module.exports = (io, socket, rooms) => {
             reason
         });
 
-        clearRoomCleanup(room);
-        room.cleanupTimer = setTimeout(() => {
+        clearMemberCleanup(room, socket.id);
+        const cleanupTimer = setTimeout(() => {
             const latestRoom = rooms.get(targetRoomId);
             const latestMember = latestRoom?.members.get(socket.id);
 
@@ -102,6 +133,7 @@ module.exports = (io, socket, rooms) => {
                 return;
             }
 
+            latestRoom.cleanupTimers?.delete(socket.id);
             latestRoom.members.delete(socket.id);
             deleteRoomIfEmpty(targetRoomId, 'disconnect-grace-expired');
 
@@ -109,6 +141,7 @@ module.exports = (io, socket, rooms) => {
                 console.log(`[room] removed stale socket=${socket.id} from room=${targetRoomId} after grace; members=${latestRoom.members.size}`);
             }
         }, ROOM_DISCONNECT_GRACE_MS);
+        room.cleanupTimers.set(socket.id, cleanupTimer);
 
         console.log(`[room] socket=${socket.id} disconnected from room=${targetRoomId} reason=${reason}; cleanup in ${ROOM_DISCONNECT_GRACE_MS}ms`);
         return targetRoomId;
@@ -133,13 +166,15 @@ module.exports = (io, socket, rooms) => {
         }
 
         const room = ensureRoom(roomId);
-        clearRoomCleanup(room);
 
         for (const [memberSocketId, member] of room.members.entries()) {
             if (memberSocketId === socket.id || member.deviceId === deviceId) {
+                clearMemberCleanup(room, memberSocketId);
                 room.members.delete(memberSocketId);
             }
         }
+
+        clearMemberCleanup(room, socket.id);
 
         const connectedMembers = Array.from(room.members.values()).filter(
             (member) => member.connected !== false

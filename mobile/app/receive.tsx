@@ -91,6 +91,7 @@ export default function ReceiveScreen() {
     let roomJoinTimeout: ReturnType<typeof setTimeout> | null = null;
     let resolveRoomJoin: (() => void) | null = null;
     let rejectRoomJoin: ((error: Error) => void) | null = null;
+    let hasJoinedReceiveRoom = false;
 
     const clearRoomJoinWait = () => {
       if (roomJoinTimeout) {
@@ -109,6 +110,7 @@ export default function ReceiveScreen() {
 
       setServerState('ready');
       setServerError(null);
+      hasJoinedReceiveRoom = true;
       webRTCService.initSignalListener();
     };
 
@@ -159,6 +161,11 @@ export default function ReceiveScreen() {
         setServerState((current) =>
           current === 'reconnecting' || current === 'offline' ? 'connecting' : current,
         );
+
+        if (hasJoinedReceiveRoom) {
+          socketService.joinRoom(socketService.deviceId);
+        }
+
         return;
       }
 

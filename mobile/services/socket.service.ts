@@ -14,7 +14,7 @@ const DEVICE_ID_KEY = '@peerdrop_deviceId';
 const NICKNAME_KEY = '@peerdrop_nickname';
 const CONNECT_TIMEOUT_MS = 18000;
 const CONNECT_ERROR_LOG_WINDOW_MS = 5000;
-const SOCKET_TRANSPORTS = ['websocket', 'polling'] as const;
+const SOCKET_TRANSPORTS = ['polling', 'websocket'] as const;
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 type SocketSubscriber = (socket: Socket | null) => void;
@@ -276,9 +276,12 @@ class SocketService {
     return await new Promise<Socket>((resolve, reject) => {
       let settled = false;
       let lastError: Error | null = null;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
       const cleanup = () => {
-        clearTimeout(timeoutId);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         socket.off('connect', handleConnect);
         socket.off('connect_error', handleConnectError);
         manager.off('reconnect_failed', handleReconnectFailed);
@@ -326,13 +329,22 @@ class SocketService {
         finishReject(lastError || new Error(`Unable to connect to ${resolvedUrl}`));
       };
 
-      const timeoutId = setTimeout(() => {
-        finishReject(lastError || new Error(`Timed out connecting to ${resolvedUrl}`));
-      }, CONNECT_TIMEOUT_MS);
-
       socket.on('connect', handleConnect);
       socket.on('connect_error', handleConnectError);
       manager.on('reconnect_failed', handleReconnectFailed);
+
+      timeoutId = setTimeout(() => {
+        if (socket.connected) {
+          finishResolve();
+          return;
+        }
+
+        finishReject(lastError || new Error(`Timed out connecting to ${resolvedUrl}`));
+      }, CONNECT_TIMEOUT_MS);
+
+      if (socket.connected) {
+        finishResolve();
+      }
     });
   }
 
