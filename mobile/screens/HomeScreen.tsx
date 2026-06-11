@@ -13,35 +13,20 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { loadTransferHistory, TransferHistoryItem } from '@/utils/transferHistory';
 import { socketService } from '../services/socket.service';
 
-
-/*interface RecentTransfer {
-  id: string;
-  fileName: string;
-  device: string;
-  date: string;
-  size: string;
-  status: 'completed' | 'failed' | 'pending';
-} */
-
 export default function HomeScreen() {
   const router = useRouter();
-  const [recentTransfers, setRecentTransfers] = useState<RecentTransfer[]>([]);
-  const [nickname, setNickname] = useState<string>('Đang tải...');
+  const [recentTransfers, setRecentTransfers] = useState<TransferHistoryItem[]>([]);
+  const [nickname, setNickname] = useState<string>('Dang tai...');
 
-  
-useEffect(() => {
-    const setupConnection = async () => {
-      await socketService.connect();
-      setNickname(socketService.nickname);
-      /* socketService.socket?.emit('join-room', {
-        roomId: socketService.deviceId,
-        userInfo: {
-          nickname: socketService.nickname,
-          avatar: socketService.avatar
-        }
-      }); */
+  useEffect(() => {
+    let active = true;
 
-      webRTCService.initSignalListener(); // Bắt đầu lắng nghe tín hiệu WebRTC ngay khi kết nối socket thành công
+    const loadIdentity = async () => {
+      await socketService.initializeIdentity();
+
+      if (active) {
+        setNickname(socketService.nickname);
+      }
     };
 
     loadIdentity().catch((error) => {
@@ -122,7 +107,7 @@ useEffect(() => {
               <Text style={styles.profileName}>{nickname}</Text>
               <View style={styles.statusRow}>
                 <View style={styles.onlineDot} />
-                <Text style={styles.statusText}>Online • Ready to share</Text>
+                <Text style={styles.statusText}>Online - Ready to share</Text>
               </View>
             </View>
             <TouchableOpacity onPress={() => router.push('/settings')} style={styles.settingsButton}>
