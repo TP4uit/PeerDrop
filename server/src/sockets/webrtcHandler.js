@@ -16,12 +16,13 @@ module.exports = (io, socket) => {
             return;
         }
 
-        const { toId, signalData } = payload;
+        const { toId, signalData, fromName } = payload;
 
         // Định tuyến an toàn gói tin tới chính xác Socket ID của thiết bị đích
         // Đính kèm fromId để thiết bị đích biết ai gửi và có thể phản hồi lại
         io.to(toId).emit('webrtc-signal', {
             fromId: socket.id,
+            fromName: fromName,
             signalData: signalData
         });
     });

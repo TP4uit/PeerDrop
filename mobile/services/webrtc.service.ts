@@ -29,6 +29,7 @@ type CompletedFileInfo = FileMetadata & {
 
 type SignalPayload = {
   fromId: string;
+  fromName?: string;
   signalData: {
     type: 'offer' | 'answer' | 'ice-candidate';
     offer?: unknown;
@@ -108,11 +109,20 @@ class WebRTCService {
     | ((percent: number, transferredBytes?: number, totalBytes?: number) => void)
     | null = null;
   public onComplete: ((fileInfo?: CompletedFileInfo | FileMetadata) => void) | null = null;
+  public pendingIncomingOffer: SignalPayload | null = null;
 
   private signalListenerReady = false;
-  private signalSocket: unknown = null;
+  private signalSocket: {
+    on: (event: string, handler: (payload: SignalPayload) => void) => void;
+    off: (event: string, handler?: (payload: SignalPayload) => void) => void;
+  } | null = null;
   private pendingIceCandidates: unknown[] = [];
   private remoteNickname = 'Remote Device';
+  private readonly signalHandler = (payload: SignalPayload) => {
+    this.handleSignal(payload).catch((error) => {
+      console.error('[WebRTC] Failed to handle signaling message:', error);
+    });
+  };
 
   private incomingFileInfo: FileMetadata | null = null;
   private incomingFilePath: string | null = null;
@@ -177,6 +187,7 @@ class WebRTCService {
 
     socketService.socket?.emit('webrtc-signal', {
       toId: targetId,
+      fromName: socketService.nickname || 'Unknown Device',
       signalData: {
         type: 'offer',
         offer,
@@ -195,37 +206,18 @@ class WebRTCService {
       return;
     }
 
+    if (this.signalSocket) {
+      this.signalSocket.off('webrtc-signal', this.signalHandler);
+    }
+
     this.signalListenerReady = true;
     this.signalSocket = socketService.socket;
-    socketService.socket.off('webrtc-signal');
-    socketService.socket.on('webrtc-signal', (payload: SignalPayload) => {
-      this.handleSignal(payload).catch((error) => {
-        console.error('[WebRTC] Failed to handle signaling message:', error);
-      });
-    });
+    socketService.socket.on('webrtc-signal', this.signalHandler);
   }
 
-  private async handleSignal({ fromId, signalData }: SignalPayload) {
+  private async handleSignal({ fromId, fromName, signalData }: SignalPayload) {
     if (signalData.type === 'offer') {
-      this.init(fromId);
-
-      await this.peerConnection.setRemoteDescription(
-        new RTCSessionDescription(signalData.offer as any),
-      );
-
-      await this.flushPendingIceCandidates();
-
-      const answer = await this.peerConnection.createAnswer();
-      await this.peerConnection.setLocalDescription(answer);
-
-      socketService.socket?.emit('webrtc-signal', {
-        toId: fromId,
-        signalData: {
-          type: 'answer',
-          answer,
-        },
-      });
-
+      this.pendingIncomingOffer = { fromId, fromName, signalData };
       return;
     }
 
@@ -250,6 +242,35 @@ class WebRTCService {
 
       await this.addIceCandidate(signalData.candidate);
     }
+  }
+
+  async acceptIncomingOffer(offerPayload?: SignalPayload) {
+    const payload = offerPayload ?? this.pendingIncomingOffer;
+
+    if (!payload || payload.signalData.type !== 'offer') {
+      return;
+    }
+
+    const { fromId, signalData } = payload;
+    this.pendingIncomingOffer = null;
+    this.init(fromId);
+
+    await this.peerConnection.setRemoteDescription(
+      new RTCSessionDescription(signalData.offer as any),
+    );
+
+    await this.flushPendingIceCandidates();
+
+    const answer = await this.peerConnection.createAnswer();
+    await this.peerConnection.setLocalDescription(answer);
+
+    socketService.socket?.emit('webrtc-signal', {
+      toId: fromId,
+      signalData: {
+        type: 'answer',
+        answer,
+      },
+    });
   }
 
   private async addIceCandidate(candidate: unknown) {
