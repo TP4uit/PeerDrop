@@ -95,6 +95,8 @@ export default function TransferScreen() {
   useEffect(() => {
     if (isTransferring && !isPaused) {
       webRTCService.onProgress = (percent, transferredBytes, totalBytes) => {
+        // Nếu người dùng đang bấm tạm dừng thì đóng băng hiển thị, không tính toán tiếp
+        if (isPaused) return;
         const now = Date.now();
         if (!transferStartTimeRef.current) {
           transferStartTimeRef.current = now;
@@ -153,7 +155,7 @@ export default function TransferScreen() {
       webRTCService.onProgress = null;
       webRTCService.onComplete = null;
     };
-  }, [isTransferring, isPaused]);
+  }, [isTransferring]);
 
   const animatedLineStyle = useAnimatedStyle(() => ({
     opacity: lineOpacity.value,
@@ -245,7 +247,7 @@ export default function TransferScreen() {
           size={200}
           strokeWidth={10}
           label={isTransferring ? 'In Progress' : 'Completed'}
-          speed={300}
+          speed={50}
         />
       </View>
 

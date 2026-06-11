@@ -10,22 +10,23 @@ import {
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { loadTransferHistory } from '@/utils/transferHistory';
+import { loadTransferHistory, TransferHistoryItem } from '@/utils/transferHistory';
 import { socketService } from '../services/socket.service';
 import { webRTCService } from '../services/webrtc.service';
 
-interface RecentTransfer {
+
+/*interface RecentTransfer {
   id: string;
   fileName: string;
   device: string;
   date: string;
   size: string;
   status: 'completed' | 'failed' | 'pending';
-}
+} */
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [recentTransfers, setRecentTransfers] = useState<RecentTransfer[]>([]);
+  const [recentTransfers, setRecentTransfers] = useState<TransferHistoryItem[]>([]);
   const [nickname, setNickname] = useState<string>('Đang tải...');
 
   
@@ -90,7 +91,7 @@ useEffect(() => {
     </TouchableOpacity>
   );
 
-  const renderTransferItem = ({ item }: { item: RecentTransfer }) => (
+  const renderTransferItem = ({ item }: { item: TransferHistoryItem }) => (
     <View style={styles.transferRow}>
       <View style={styles.transferRowLeft}>
         <View style={styles.transferIconBox}>
