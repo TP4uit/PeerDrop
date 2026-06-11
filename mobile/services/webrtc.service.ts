@@ -8,7 +8,7 @@ import {
 import { socketService } from './socket.service';
 import { addTransferHistoryItem } from '@/utils/transferHistory';
 
-type PeerDropFile = {
+export type PeerDropFile = {
   uri: string;
   name?: string;
   size: number;
@@ -103,7 +103,7 @@ class WebRTCService {
   public peerConnection: any = null;
   public dataChannel: any = null;
   public targetSocketId: string | null = null;
-  public pendingFile: PeerDropFile | null = null;
+  public pendingFiles: PeerDropFile[] = [];
 
   public onConnected: ((remoteDeviceName: string) => void) | null = null;
   public onProgress:
@@ -132,6 +132,15 @@ class WebRTCService {
   private isWriting = false;
   private lastReceiveProgress = -1;
   private lastSendProgress = -1;
+  private pendingFileAcks = new Map<string, () => void>();
+
+  get pendingFile() {
+    return this.pendingFiles[0] ?? null;
+  }
+
+  set pendingFile(file: PeerDropFile | null) {
+    this.pendingFiles = file ? [file] : [];
+  }
 
   init(targetId: string) {
     this.targetSocketId = targetId;
@@ -365,6 +374,12 @@ class WebRTCService {
         return true;
       }
 
+      if (parsed.type === 'FILE_RECEIVED' || parsed.type === 'file-received') {
+        const fileId = parsed.id || parsed.metadata?.id;
+        this.resolveFileAck(fileId);
+        return true;
+      }
+
       return Boolean(parsed.type);
     } catch {
       return false;
@@ -386,6 +401,12 @@ class WebRTCService {
     this.incomingFilePath = incomingPath;
     this.receivedSize = 0;
     this.lastReceiveProgress = -1;
+
+    if (metadata.size <= 0) {
+      await this.completeIncomingFile();
+      return;
+    }
+
     this.processReceiveQueue();
   }
 
@@ -474,6 +495,11 @@ class WebRTCService {
     }
 
     this.onProgress?.(100, this.incomingFileInfo.size, this.incomingFileInfo.size);
+    this.sendControlMessage({
+      type: 'FILE_RECEIVED',
+      id: this.incomingFileInfo.id,
+      metadata: completed,
+    });
 
     //  Ghi nhận lịch sử cho máy NHẬN
     const now = new Date();
@@ -500,20 +526,86 @@ class WebRTCService {
   }
 
   async sendFile(file: PeerDropFile) {
-    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-      console.warn('[WebRTC] DataChannel is not open; cannot send file');
+    await this.sendFiles([file]);
+  }
+
+  async sendFiles(files: PeerDropFile[]) {
+    const filesToSend = files.filter((file) => Boolean(file?.uri));
+
+    if (filesToSend.length === 0) {
       return;
+    }
+
+    await this.waitForDataChannelOpen();
+
+    const totalBytes = filesToSend.reduce(
+      (total, file) => total + Math.max(0, Number(file.size) || 0),
+      0,
+    );
+    let sentBeforeCurrentFile = 0;
+    let lastMetadata: FileMetadata | null = null;
+
+    this.lastSendProgress = -1;
+    this.reportSendProgress(0, totalBytes);
+
+    for (const file of filesToSend) {
+      const { metadata, ackPromise } = await this.sendSingleFile(
+        file,
+        sentBeforeCurrentFile,
+        totalBytes,
+      );
+      lastMetadata = metadata;
+      sentBeforeCurrentFile += metadata.size;
+      this.reportSendProgress(sentBeforeCurrentFile, totalBytes);
+      await ackPromise;
+    }
+
+    const batchName =
+      filesToSend.length === 1 && lastMetadata
+        ? lastMetadata.name
+        : `${filesToSend.length} files`;
+
+    const now = new Date();
+    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    await addTransferHistoryItem({
+      id: `tx-sx-${Date.now()}`,
+      fileName: batchName,
+      device: this.remoteNickname,
+      date: `Hôm nay, ${timeString}`,
+      size: formatBytes(totalBytes),
+      status: 'completed',
+    });
+
+    this.onComplete?.({
+      id: `batch-${Date.now()}`,
+      name: batchName,
+      size: totalBytes,
+      fileType:
+        filesToSend.length === 1 && lastMetadata
+          ? lastMetadata.fileType
+          : 'application/octet-stream',
+    });
+  }
+
+  private async sendSingleFile(
+    file: PeerDropFile,
+    sentBeforeCurrentFile: number,
+    batchTotalBytes: number,
+  ) {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+      throw new Error('DataChannel is not open; cannot send file');
     }
 
     const filePath = normalizeFileUri(file.uri);
     const metadata: FileMetadata = {
       id: createTransferId(),
       name: file.name || filePath.split('/').pop() || 'peerdrop-file',
-      size: Number(file.size),
+      size: Math.max(0, Number(file.size) || 0),
       fileType: file.mimeType || file.type || 'application/octet-stream',
     };
 
-    this.lastSendProgress = -1;
+    const ackPromise = this.waitForFileAck(metadata.id);
+
     this.sendControlMessage({
       type: 'FILE_META',
       metadata,
@@ -530,25 +622,21 @@ class WebRTCService {
       this.dataChannel.send(base64Chunk);
 
       offset += bytesToRead;
-      this.reportSendProgress(offset, metadata.size);
+      this.reportSendProgress(sentBeforeCurrentFile + offset, batchTotalBytes);
     }
 
-    // Ghi nhận lịch sử cho máy GỬI khi gửi kết thúc thành công
-    const now = new Date();
-    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    await addTransferHistoryItem({
-      id: `tx-sx-${Date.now()}`,
-      fileName: metadata.name,
-      device: this.remoteNickname, 
-      date: `Hôm nay, ${timeString}`,
-      size: formatBytes(metadata.size),
-      status: 'completed',
-    });
-
-    this.onComplete?.(metadata);
+    return { metadata, ackPromise };
   }
 
   private reportSendProgress(sentBytes: number, totalBytes: number) {
+    if (totalBytes <= 0) {
+      if (this.lastSendProgress !== 100) {
+        this.lastSendProgress = 100;
+        this.onProgress?.(100, 0, 0);
+      }
+      return;
+    }
+
     const progress = Math.min(100, Math.round((sentBytes / totalBytes) * 100));
 
     if (progress !== this.lastSendProgress) {
@@ -565,6 +653,46 @@ class WebRTCService {
     ) {
       await this.waitForBufferedAmountLow();
     }
+  }
+
+  private async waitForDataChannelOpen(timeoutMs = 15000) {
+    const startedAt = Date.now();
+
+    while (this.dataChannel?.readyState !== 'open') {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error('Timed out waiting for DataChannel to open');
+      }
+
+      await sleep(100);
+    }
+  }
+
+  private waitForFileAck(fileId: string, timeoutMs = 10 * 60 * 1000) {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingFileAcks.delete(fileId);
+        reject(new Error(`Timed out waiting for receiver to finish ${fileId}`));
+      }, timeoutMs);
+
+      this.pendingFileAcks.set(fileId, () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+  }
+
+  private resolveFileAck(fileId?: string) {
+    if (!fileId) {
+      return;
+    }
+
+    const resolve = this.pendingFileAcks.get(fileId);
+    if (!resolve) {
+      return;
+    }
+
+    this.pendingFileAcks.delete(fileId);
+    resolve();
   }
 
   private waitForBufferedAmountLow() {
@@ -636,6 +764,7 @@ class WebRTCService {
     this.dataChannel = null;
     this.peerConnection = null;
     this.pendingIceCandidates = [];
+    this.pendingFileAcks.clear();
   }
 
   disconnect() {
@@ -645,7 +774,12 @@ class WebRTCService {
   }
 }
 
-// Hàm hỗ trợ đổi số bytes sang định dạng KB/MB hiển thị lên UI cho đẹp
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   const k = 1024;

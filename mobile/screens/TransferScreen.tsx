@@ -20,7 +20,6 @@ import Animated, {
   withSequence,
 } from 'react-native-reanimated';
 import CircularProgress from '@/components/ui/CircularProgress';
-import { addTransferHistoryItem } from '@/utils/transferHistory';
 import { webRTCService } from '../services/webrtc.service';
 
 interface TransferStats {
@@ -56,8 +55,14 @@ export default function TransferScreen() {
   const router = useRouter();
   const { deviceName, fileCount, totalSize } = useLocalSearchParams();
   const { width } = useWindowDimensions();
+  const pendingFilesSnapshotRef = useRef([...webRTCService.pendingFiles]);
+  const sendStartedRef = useRef(false);
+  const pendingFilesTotalBytes = pendingFilesSnapshotRef.current.reduce(
+    (total, file) => total + Math.max(0, Number(file.size) || 0),
+    0,
+  );
   const transferStartTimeRef = useRef<number | null>(null);
-  const activeTotalBytesRef = useRef(webRTCService.pendingFile?.size || 0);
+  const activeTotalBytesRef = useRef(pendingFilesTotalBytes);
 
   const [progress, setProgress] = useState(0);
   const [isTransferring, setIsTransferring] = useState(true);
@@ -93,7 +98,7 @@ export default function TransferScreen() {
 
   // Track transfer progress from the WebRTC service.
   useEffect(() => {
-    if (isTransferring && !isPaused) {
+    if (isTransferring) {
       webRTCService.onProgress = (percent, transferredBytes, totalBytes) => {
         // Nếu người dùng đang bấm tạm dừng thì đóng băng hiển thị, không tính toán tiếp
         if (isPaused) return;
@@ -131,11 +136,11 @@ export default function TransferScreen() {
         setIsTransferring(false);
       };
 
-      // --- THÊM ĐOẠN NÀY VÀO DƯỚI CÙNG ---
-      // Nếu có file đang nằm chờ, ra lệnh gửi ngay khi màn hình đã sẵn sàng
-      if (webRTCService.pendingFile) {
-        const fileToSend = webRTCService.pendingFile;
-        activeTotalBytesRef.current = fileToSend.size || activeTotalBytesRef.current;
+      const filesToSend = pendingFilesSnapshotRef.current;
+
+      if (!sendStartedRef.current && filesToSend.length > 0) {
+        sendStartedRef.current = true;
+        activeTotalBytesRef.current = pendingFilesTotalBytes || activeTotalBytesRef.current;
         transferStartTimeRef.current = Date.now();
         setStats({
           speed: '0 B/s',
@@ -144,10 +149,12 @@ export default function TransferScreen() {
           total: formatBytes(activeTotalBytesRef.current),
         });
 
-        webRTCService.sendFile(fileToSend);
+        webRTCService.sendFiles(filesToSend).catch((error) => {
+          console.error('[Transfer] Failed to send files:', error);
+          setIsTransferring(false);
+        });
         
-        // Xóa file trong kho đi để không bị gửi lặp lại
-        webRTCService.pendingFile = null; 
+        webRTCService.pendingFiles = [];
       }
     }
 
@@ -155,7 +162,7 @@ export default function TransferScreen() {
       webRTCService.onProgress = null;
       webRTCService.onComplete = null;
     };
-  }, [isTransferring]);
+  }, [isPaused, isTransferring, pendingFilesTotalBytes]);
 
   const animatedLineStyle = useAnimatedStyle(() => ({
     opacity: lineOpacity.value,
@@ -165,16 +172,7 @@ export default function TransferScreen() {
     left: `${segmentOffset.value}%`,
   }));
 
-  const handleComplete = async () => {
-    await addTransferHistoryItem({
-      id: `${Date.now()}`,
-      fileName: `${fileCount} file${fileCount === '1' ? '' : 's'}`,
-      device: (deviceName as string) || 'Unknown Device',
-      date: new Date().toLocaleString(),
-      size: (totalSize as string) || '0 MB',
-      status: 'completed',
-    });
-
+  const handleComplete = () => {
     router.dismissAll();
     router.push('/');
   };
@@ -197,6 +195,7 @@ export default function TransferScreen() {
   const handleSendAgain = () => {
     setProgress(0);
     transferStartTimeRef.current = null;
+    sendStartedRef.current = false;
     setStats({
       speed: '0 B/s',
       timeRemaining: '0s',

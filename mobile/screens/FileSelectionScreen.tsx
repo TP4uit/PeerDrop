@@ -12,19 +12,21 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { webRTCService } from '../services/webrtc.service';
 
 type MediaKind = 'image' | 'video';
+type SelectedFileKind = MediaKind | 'document';
 
-interface SelectedMediaFile {
+interface SelectedFile {
   id: string;
   uri: string;
-  thumbnailUri: string;
+  thumbnailUri?: string;
   name: string;
   size: number;
-  type: MediaKind;
+  type: SelectedFileKind;
   mimeType: string;
   duration?: number;
 }
@@ -72,6 +74,9 @@ const getMimeType = (filename: string, type: MediaKind) => {
   return extensionMimeTypes[extension] ?? (type === 'video' ? 'video/mp4' : 'image/jpeg');
 };
 
+const getDocumentMimeType = (asset: DocumentPicker.DocumentPickerAsset) =>
+  asset.mimeType || 'application/octet-stream';
+
 const formatBytes = (bytes = 0) => {
   if (!bytes) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
@@ -116,13 +121,14 @@ export default function FileSelectionScreen() {
 
   const [activeTab, setActiveTab] = useState<(typeof fileTabs)[number]>('All');
   const [mediaFiles, setMediaFiles] = useState<MediaItem[]>([]);
-  const [selectedFiles, setSelectedFiles] = useState<SelectedMediaFile[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [permissionGranted, setPermissionGranted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [endCursor, setEndCursor] = useState<string | undefined>();
   const [resolvingAssetId, setResolvingAssetId] = useState<string | null>(null);
+  const [isPickingDocuments, setIsPickingDocuments] = useState(false);
 
   const columnCount = 3;
   const itemGap = 10;
@@ -151,6 +157,10 @@ export default function FileSelectionScreen() {
     [selectedFiles],
   );
   const totalSize = formatBytes(totalBytes);
+  const selectedDocumentFiles = useMemo(
+    () => selectedFiles.filter((file) => file.type === 'document'),
+    [selectedFiles],
+  );
 
   const appendAssets = useCallback((assets: MediaLibrary.Asset[]) => {
     setMediaFiles((current) => {
@@ -224,7 +234,7 @@ export default function FileSelectionScreen() {
     }
   }, [endCursor, fetchMediaPage, hasNextPage, isLoadingMore, permissionGranted]);
 
-  const resolveSelectedFile = useCallback(async (item: MediaItem): Promise<SelectedMediaFile> => {
+  const resolveSelectedFile = useCallback(async (item: MediaItem): Promise<SelectedFile> => {
     const assetInfo = await MediaLibrary.getAssetInfoAsync(item.asset, {
       shouldDownloadFromNetwork: true,
     });
@@ -272,12 +282,64 @@ export default function FileSelectionScreen() {
     [resolveSelectedFile, selectedIds],
   );
 
+  const handlePickDocuments = useCallback(async () => {
+    setIsPickingDocuments(true);
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets) {
+        return;
+      }
+
+      const pickedFiles = await Promise.all(
+        result.assets.map(async (asset) => {
+          const size = asset.size ?? (await getFileSize(asset.uri));
+
+          return {
+            id: `document:${asset.uri}:${asset.name}`,
+            uri: asset.uri,
+            name: asset.name || 'Selected file',
+            size,
+            type: 'document' as const,
+            mimeType: getDocumentMimeType(asset),
+          };
+        }),
+      );
+
+      setSelectedFiles((current) => {
+        const existingIds = new Set(current.map((file) => file.id));
+        const nextFiles = pickedFiles.filter((file) => !existingIds.has(file.id));
+        return [...current, ...nextFiles];
+      });
+    } catch (error) {
+      console.error('[FileSelection] Failed to pick documents:', error);
+      Alert.alert('Selection Error', 'Unable to prepare the selected files for sending.');
+    } finally {
+      setIsPickingDocuments(false);
+    }
+  }, []);
+
+  const removeSelectedFile = useCallback((fileId: string) => {
+    setSelectedFiles((current) => current.filter((file) => file.id !== fileId));
+  }, []);
+
   const handleSend = useCallback(() => {
     if (selectedFiles.length === 0) {
       return;
     }
 
-    webRTCService.pendingFile = selectedFiles[0];
+    webRTCService.pendingFiles = selectedFiles.map((file) => ({
+      uri: file.uri,
+      name: file.name,
+      size: file.size,
+      mimeType: file.mimeType,
+      type: file.type,
+    }));
     router.push({
       pathname: '/transfer',
       params: {
@@ -393,6 +455,45 @@ export default function FileSelectionScreen() {
 
       <View style={styles.tabRow}>{fileTabs.map(renderTab)}</View>
 
+      <TouchableOpacity
+        activeOpacity={0.86}
+        disabled={isPickingDocuments}
+        style={[styles.filePickerButton, isPickingDocuments && styles.filePickerButtonDisabled]}
+        onPress={handlePickDocuments}
+      >
+        {isPickingDocuments ? (
+          <ActivityIndicator size="small" color="#82F7B2" />
+        ) : (
+          <MaterialCommunityIcons name="file-plus-outline" size={20} color="#82F7B2" />
+        )}
+        <Text style={styles.filePickerText}>Pick Files</Text>
+      </TouchableOpacity>
+
+      {selectedDocumentFiles.length > 0 && (
+        <View style={styles.documentList}>
+          {selectedDocumentFiles.map((file) => (
+            <View key={file.id} style={styles.documentRow}>
+              <View style={styles.documentIcon}>
+                <MaterialCommunityIcons name="file-outline" size={18} color="#82F7B2" />
+              </View>
+              <View style={styles.documentTextWrap}>
+                <Text style={styles.documentName} numberOfLines={1}>
+                  {file.name}
+                </Text>
+                <Text style={styles.documentSize}>{formatBytes(file.size)}</Text>
+              </View>
+              <TouchableOpacity
+                accessibilityRole="button"
+                onPress={() => removeSelectedFile(file.id)}
+                style={styles.documentRemoveButton}
+              >
+                <MaterialCommunityIcons name="close" size={16} color="#A6B6E8" />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      )}
+
       <FlatList
         data={displayedFiles}
         renderItem={renderMediaItem}
@@ -422,7 +523,7 @@ export default function FileSelectionScreen() {
           <View>
             <Text style={styles.fabTitle}>Send</Text>
             <Text style={styles.fabSubtitle}>
-              {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} • {totalSize}
+              {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} - {totalSize}
             </Text>
           </View>
           <MaterialCommunityIcons name="send" size={22} color="#05091B" />
@@ -502,6 +603,71 @@ const styles = StyleSheet.create({
   },
   tabTextActive: {
     color: '#82F7B2',
+  },
+  filePickerButton: {
+    minHeight: 48,
+    marginHorizontal: 20,
+    marginBottom: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(130, 247, 178, 0.28)',
+    backgroundColor: 'rgba(130, 247, 178, 0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  filePickerButtonDisabled: {
+    opacity: 0.7,
+  },
+  filePickerText: {
+    color: '#82F7B2',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  documentList: {
+    marginHorizontal: 20,
+    marginBottom: 14,
+    gap: 8,
+  },
+  documentRow: {
+    minHeight: 54,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  documentIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(130, 247, 178, 0.12)',
+  },
+  documentTextWrap: {
+    flex: 1,
+    marginLeft: 10,
+    minWidth: 0,
+  },
+  documentName: {
+    color: '#DDE6FF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  documentSize: {
+    color: '#9DB1F1',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  documentRemoveButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   gridContent: {
     flexGrow: 1,
